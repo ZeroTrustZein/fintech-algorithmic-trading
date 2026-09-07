@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fintech-algorithmic-trading"
+version = "0.1.0"
+description = "FinTech algorithmic trading risk engine and Monte Carlo Value-at-Risk (VaR) analyzer"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Portfolio Automation" }]
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pydantic>=2.0.0",
+    "click>=8.0.0",
+    "rich>=12.0.0",
+    "typing_extensions>=4.6.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+    "build>=1.0.0",
+    "twine>=5.0.0",
+]
+
+[project.scripts]
+fintech-algorithmic-trading = "fintech_algorithmic_trading.cli.main:cli"
+risk-engine = "fintech_algorithmic_trading.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["fintech_algorithmic_trading*"]
+
+[tool.setuptools.package-data]
+fintech_algorithmic_trading = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+source = ["fintech_algorithmic_trading"]
+omit = ["tests/*"]
+
+[tool.mypy]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = true

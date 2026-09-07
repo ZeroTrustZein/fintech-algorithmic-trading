@@ -6,8 +6,10 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from fintech_algorithmic_trading.engine.sizing import PositionSizer
 from fintech_algorithmic_trading.types import (
     AssetClass,
+    KellySizingResult,
     Portfolio,
     RiskComplianceReport,
     RiskLimits,
@@ -212,3 +214,20 @@ class PortfolioRiskEngine:
         raw_weight = target_vol_annual / asset_vol_annual
         weight = min(max_weight_cap, max(0.0, raw_weight))
         return round(weight * portfolio_nav, 2)
+
+    @staticmethod
+    def calculate_kelly_bounds(
+        expected_return_annual: float,
+        volatility_annual: float,
+        risk_free_rate: float = 0.045,
+        portfolio_nav: float = 100000.0,
+        fractional_factor: float = 0.5,
+    ) -> KellySizingResult:
+        """Calculate continuous-time Kelly criterion sizing bounds."""
+        return PositionSizer.calculate_continuous_kelly(
+            expected_return_annual=expected_return_annual,
+            volatility_annual=volatility_annual,
+            risk_free_rate=risk_free_rate,
+            portfolio_nav=portfolio_nav,
+            fractional_factor=fractional_factor,
+        )

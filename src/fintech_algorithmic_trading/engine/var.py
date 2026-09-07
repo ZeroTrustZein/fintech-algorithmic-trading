@@ -8,6 +8,7 @@ from typing import Dict, Sequence
 import numpy as np
 import scipy.stats as stats
 
+from fintech_algorithmic_trading.engine.evt import calculate_evt_var
 from fintech_algorithmic_trading.types import Portfolio, VaRMethod, VaRResult
 
 
@@ -200,9 +201,10 @@ class VaRCalculator:
         portfolio_value: float,
         confidence_level: float = 0.95,
         horizon_days: int = 1,
+        include_evt: bool = True,
     ) -> Dict[VaRMethod, VaRResult]:
-        """Compute Historical, Parametric, and Cornish-Fisher VaR metrics simultaneously."""
-        return {
+        """Compute Historical, Parametric, Cornish-Fisher, and EVT VaR metrics simultaneously."""
+        results: Dict[VaRMethod, VaRResult] = {
             VaRMethod.HISTORICAL: calculate_historical_var(
                 returns, portfolio_value, confidence_level, horizon_days
             ),
@@ -213,6 +215,14 @@ class VaRCalculator:
                 returns, portfolio_value, confidence_level, horizon_days
             ),
         }
+        if include_evt and len(returns) >= 20:
+            try:
+                results[VaRMethod.EXTREME_VALUE_THEORY] = calculate_evt_var(
+                    returns, portfolio_value, confidence_level, horizon_days
+                )
+            except Exception:
+                pass
+        return results
 
     @staticmethod
     def calculate_portfolio_parametric_var(

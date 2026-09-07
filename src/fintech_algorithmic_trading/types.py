@@ -40,6 +40,7 @@ class VaRMethod(str, Enum):
     PARAMETRIC = "PARAMETRIC"
     CORNISH_FISHER = "CORNISH_FISHER"
     MONTE_CARLO = "MONTE_CARLO"
+    EXTREME_VALUE_THEORY = "EXTREME_VALUE_THEORY"
 
 
 class DriftModel(str, Enum):
@@ -318,3 +319,100 @@ class OptionGreeks(BaseModel):
     vega: float
     theta: float
     rho: float
+
+
+class OptimizationObjective(str, Enum):
+    """Portfolio optimization target function."""
+
+    MAX_SHARPE = "MAX_SHARPE"
+    MIN_VARIANCE = "MIN_VARIANCE"
+    RISK_PARITY = "RISK_PARITY"
+    EQUAL_WEIGHT = "EQUAL_WEIGHT"
+
+
+class OptimizationResult(BaseModel):
+    """Portfolio optimization output."""
+
+    objective: OptimizationObjective
+    weights: Dict[str, float]
+    expected_return_annual: float
+    volatility_annual: float
+    sharpe_ratio: float
+    risk_contributions: Dict[str, float] = Field(default_factory=dict)
+    computation_time_ms: float = 0.0
+
+
+class KellyCriterionMode(str, Enum):
+    """Kelly position sizing computation mode."""
+
+    CONTINUOUS = "CONTINUOUS"
+    DISCRETE = "DISCRETE"
+
+
+class KellySizingResult(BaseModel):
+    """Kelly criterion sizing outcome and risk metrics."""
+
+    mode: KellyCriterionMode
+    full_kelly_fraction: float
+    half_kelly_fraction: float
+    quarter_kelly_fraction: float
+    recommended_fraction: float
+    recommended_position_size: float
+    expected_growth_rate: float
+    max_drawdown_risk_pct: float
+
+
+class EVTResult(BaseModel):
+    """Peaks-Over-Threshold Extreme Value Theory VaR output."""
+
+    confidence_level: float
+    horizon_days: int
+    threshold_u: float
+    exceedance_count: int
+    shape_parameter_xi: float
+    scale_parameter_beta: float
+    var_amount: float
+    var_pct: float
+    cvar_amount: float
+    cvar_pct: float
+    portfolio_value: float
+    computation_time_ms: float = 0.0
+
+
+class OptionContract(BaseModel):
+    """Individual option position definition for derivatives portfolio."""
+
+    symbol: str
+    underlying_symbol: str
+    option_type: OptionType
+    spot_price: float = Field(gt=0)
+    strike_price: float = Field(gt=0)
+    time_to_expiry_years: float = Field(gt=0)
+    volatility: float = Field(gt=0)
+    quantity: float = Field(description="Contracts held; positive for long, negative for short")
+    multiplier: float = Field(default=100.0, gt=0, description="Underlying shares per contract")
+
+
+class PortfolioGreeks(BaseModel):
+    """Aggregate multi-leg derivatives portfolio Greeks."""
+
+    net_delta: float
+    net_gamma: float
+    net_vega: float
+    net_theta: float
+    net_rho: float
+    total_market_value: float
+
+
+class DeltaGammaHedge(BaseModel):
+    """Calculated hedge allocation to neutralize Delta and Gamma."""
+
+    underlying_symbol: str
+    target_net_delta: float = 0.0
+    target_net_gamma: float = 0.0
+    underlying_shares_needed: float
+    hedge_option_symbol: Optional[str] = None
+    hedge_option_contracts_needed: float = 0.0
+    post_hedge_delta: float = 0.0
+    post_hedge_gamma: float = 0.0
+

@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 
 class AssetClass(str, Enum):
@@ -464,13 +464,11 @@ class Bar(BaseModel):
     close: float = Field(gt=0)
     volume: float = Field(ge=0)
 
-    @field_validator("high")
-    @classmethod
-    def high_ge_low_and_open_close(cls, v: float, info: ValidationInfo) -> float:
-        data = info.data
-        if "low" in data and v < data["low"]:
-            raise ValueError(f"High {v} cannot be less than low {data['low']}")
-        return v
+    @model_validator(mode="after")
+    def high_ge_low(self) -> Bar:
+        if self.high < self.low:
+            raise ValueError(f"High {self.high} cannot be less than low {self.low}")
+        return self
 
 
 class Quote(BaseModel):

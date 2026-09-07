@@ -288,8 +288,8 @@ class DataExporter:
         for r in results:
             writer.writerow(
                 [
-                    r.scenario_id,
-                    r.scenario_name,
+                    r.scenario.id,
+                    r.scenario.name,
                     r.portfolio_value_before,
                     r.portfolio_value_after,
                     r.absolute_impact,

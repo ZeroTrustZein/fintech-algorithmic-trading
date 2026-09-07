@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -261,4 +262,39 @@ class DataExporter:
             )
             var_val = result.rolling_var_95[i] if i < len(result.rolling_var_95) else 0.0
             writer.writerow([i, nav, ret, var_val])
+        return output.getvalue()
+
+    @staticmethod
+    def export_stress_test_json(results: List[StressTestResult]) -> str:
+        """Export macroeconomic stress test outcomes as JSON."""
+        return json.dumps([r.model_dump() for r in results], indent=2)
+
+    @staticmethod
+    def export_stress_test_csv(results: List[StressTestResult]) -> str:
+        """Export macroeconomic stress test outcomes as CSV."""
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "scenario_id",
+                "scenario_name",
+                "portfolio_value_before",
+                "portfolio_value_after",
+                "absolute_impact",
+                "percentage_impact",
+                "capital_adequacy_passed",
+            ]
+        )
+        for r in results:
+            writer.writerow(
+                [
+                    r.scenario_id,
+                    r.scenario_name,
+                    r.portfolio_value_before,
+                    r.portfolio_value_after,
+                    r.absolute_impact,
+                    r.percentage_impact,
+                    r.capital_adequacy_passed,
+                ]
+            )
         return output.getvalue()

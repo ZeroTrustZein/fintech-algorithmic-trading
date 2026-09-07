@@ -12,11 +12,16 @@ from rich.table import Table
 
 from fintech_algorithmic_trading.backtest import BacktestEngine
 from fintech_algorithmic_trading.data import MarketDataFeed
+from fintech_algorithmic_trading.engine.evt import EVTEngine
 from fintech_algorithmic_trading.engine.greeks import calculate_option_greeks
+from fintech_algorithmic_trading.engine.hedging import OptionHedgingEngine
 from fintech_algorithmic_trading.engine.monte_carlo import MonteCarloEngine
+from fintech_algorithmic_trading.engine.optimizer import PortfolioOptimizer
 from fintech_algorithmic_trading.engine.risk_engine import PortfolioRiskEngine
+from fintech_algorithmic_trading.engine.sizing import PositionSizer
 from fintech_algorithmic_trading.engine.var import VaRCalculator
-from fintech_algorithmic_trading.reporting import RiskReportGenerator
+from fintech_algorithmic_trading.execution import OrderManagementSystem
+from fintech_algorithmic_trading.reporting import DataExporter, RiskReportGenerator
 from fintech_algorithmic_trading.storage.repository import PortfolioRepository
 from fintech_algorithmic_trading.strategy import (
     AlphaStrategy,
@@ -31,7 +36,12 @@ from fintech_algorithmic_trading.types import (
     CircuitBreakerState,
     DriftModel,
     MonteCarloConfig,
+    OptimizationObjective,
+    OptionContract,
     OptionType,
+    OrderSide,
+    OrderType,
+    PositionType,
     RiskLimits,
 )
 
@@ -46,9 +56,25 @@ def cli():
 
 
 @cli.command("list-portfolios")
-def list_portfolios_cmd():
+@click.option("--json-out", is_flag=True, help="Output raw JSON")
+def list_portfolios_cmd(json_out: bool = False):
     """List available institutional benchmark portfolios."""
     portfolios = PortfolioRepository.get_benchmark_portfolios()
+    if json_out:
+        out = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "positions_count": len(p.positions),
+                "nav": p.net_asset_value,
+                "gross_exposure": p.gross_exposure,
+                "leverage": p.leverage,
+            }
+            for p in portfolios.values()
+        ]
+        console.print(json.dumps(out, indent=2))
+        return
+
     table = Table(
         title="Institutional Benchmark Portfolios", show_header=True, header_style="bold cyan"
     )

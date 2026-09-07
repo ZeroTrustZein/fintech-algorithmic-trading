@@ -87,6 +87,7 @@ class PortfolioOptimizer:
             w_opt = init_w
 
         elif objective == OptimizationObjective.MIN_VARIANCE:
+
             def min_var_fn(w: np.ndarray) -> float:
                 return float(np.dot(w.T, np.dot(cov, w)))
 
@@ -101,6 +102,7 @@ class PortfolioOptimizer:
             w_opt = res.x if res.success else init_w
 
         elif objective == OptimizationObjective.MAX_SHARPE:
+
             def neg_sharpe_fn(w: np.ndarray) -> float:
                 r, v = self._portfolio_performance(w, mu, cov)
                 excess = r - self.risk_free_rate

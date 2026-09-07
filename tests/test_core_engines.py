@@ -341,7 +341,7 @@ def test_portfolio_greeks_aggregation():
     greeks = OptionHedgingEngine.calculate_portfolio_greeks([c1, c2], underlying_shares=0.0)
     assert greeks.net_delta > 0.0  # Call delta exceeds put delta
     assert greeks.net_gamma > 0.0  # Both calls and puts have positive long gamma
-    assert greeks.net_vega > 0.0   # Both long options have positive vega
+    assert greeks.net_vega > 0.0  # Both long options have positive vega
     assert greeks.net_theta < 0.0  # Long options suffer negative theta decay
     assert greeks.total_market_value > 0.0
 

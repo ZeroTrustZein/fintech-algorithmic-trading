@@ -10,12 +10,25 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from fintech_algorithmic_trading.backtest import BacktestEngine
+from fintech_algorithmic_trading.data import MarketDataFeed
 from fintech_algorithmic_trading.engine.greeks import calculate_option_greeks
 from fintech_algorithmic_trading.engine.monte_carlo import MonteCarloEngine
 from fintech_algorithmic_trading.engine.risk_engine import PortfolioRiskEngine
 from fintech_algorithmic_trading.engine.var import VaRCalculator
+from fintech_algorithmic_trading.reporting import RiskReportGenerator
 from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.strategy import (
+    AlphaStrategy,
+    CompositeAlphaAggregator,
+    MeanRevertingBollingerStrategy,
+    TrendFollowingMACDStrategy,
+    VolatilityBreakoutStrategy,
+)
+from fintech_algorithmic_trading.surveillance import RiskSurveillanceMonitor
 from fintech_algorithmic_trading.types import (
+    BacktestConfig,
+    CircuitBreakerState,
     DriftModel,
     MonteCarloConfig,
     OptionType,
@@ -329,6 +342,212 @@ def greeks_cmd(
     table.add_row("Rho (ρ)", f"{greeks.rho:.4f} per 100 bps")
 
     console.print(table)
+
+
+@cli.command("backtest")
+@click.option("--symbol", "-s", default="SPY", help="Asset ticker symbol")
+@click.option(
+    "--strategy",
+    "-t",
+    type=click.Choice(["macd", "bollinger", "breakout", "composite"]),
+    default="composite",
+    help="Alpha strategy model",
+)
+@click.option("--bars", "-b", default=252, type=int, help="Historical bars count")
+@click.option("--capital", "-c", default=100_000.0, type=float, help="Initial capital")
+def backtest_cmd(symbol: str, strategy: str, bars: int, capital: float):
+    """Run event-driven backtest with realistic execution slippage and commissions."""
+    feed = MarketDataFeed()
+    history = feed.generate_synthetic_history(
+        symbol=symbol,
+        start_price=500.0,
+        n_bars=bars,
+        volatility_annual=0.18,
+        drift_annual=0.10,
+    )
+
+    strat: AlphaStrategy | CompositeAlphaAggregator
+    if strategy == "macd":
+        strat = TrendFollowingMACDStrategy()
+    elif strategy == "bollinger":
+        strat = MeanRevertingBollingerStrategy()
+    elif strategy == "breakout":
+        strat = VolatilityBreakoutStrategy()
+    else:
+        strat = CompositeAlphaAggregator()
+
+    cfg = BacktestConfig(initial_capital=capital)
+    engine = BacktestEngine(config=cfg)
+
+    with console.status(
+        f"[bold green]Running {strategy.upper()} backtest on {symbol} across {bars} bars..."
+    ):
+        res = engine.run(symbol=symbol, bars=history, strategy=strat)
+
+    m = res.metrics
+    table = Table(
+        title=f"Backtest Performance Attribution: {symbol} ({strategy.upper()})",
+        show_header=False,
+    )
+    table.add_column("Metric", style="bold cyan")
+    table.add_column("Value", justify="right")
+
+    table.add_row("Initial Capital", f"${res.initial_capital:,.2f}")
+    table.add_row("Final Capital", f"${res.final_capital:,.2f}")
+    table.add_row(
+        "Total Return",
+        f"[{'green' if m.total_return_pct >= 0 else 'red'}]{m.total_return_pct * 100:.2f}%[/{'green' if m.total_return_pct >= 0 else 'red'}]",
+    )
+    table.add_row("Annualized Return", f"{m.annualized_return * 100:.2f}%")
+    table.add_row("Annualized Volatility", f"{m.annualized_volatility * 100:.2f}%")
+    table.add_row("Sharpe Ratio", f"{m.sharpe_ratio:.2f}")
+    table.add_row("Sortino Ratio", f"{m.sortino_ratio:.2f}")
+    table.add_row("Calmar Ratio", f"{m.calmar_ratio:.2f}")
+    table.add_row("Max Drawdown", f"[red]{m.max_drawdown_pct * 100:.2f}%[/red]")
+    table.add_row("Max Drawdown Duration", f"{m.max_drawdown_duration_bars} bars")
+    table.add_row("Win Rate", f"{m.win_rate * 100:.1f}%")
+    table.add_row("Profit Factor", f"{m.profit_factor:.2f}")
+    table.add_row("Trade Expectancy", f"${m.expectancy:,.2f}")
+    table.add_row(
+        "Total Trades",
+        f"{m.total_trades} (Win: {m.profitable_trades}, Loss: {m.loss_making_trades})",
+    )
+    table.add_row("Execution Latency", f"{res.computation_time_ms:.2f} ms")
+
+    console.print(table)
+
+
+@cli.command("surveillance")
+@click.option("--portfolio", "-p", default="global-macro", help="Portfolio preset ID")
+def surveillance_cmd(portfolio: str):
+    """Run real-time risk surveillance audit and circuit breaker status check."""
+    port = PortfolioRepository.get_portfolio(portfolio)
+    if not port:
+        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
+        raise click.Abort()
+
+    monitor = RiskSurveillanceMonitor()
+    report = monitor.audit_portfolio(port)
+
+    status_color = (
+        "green"
+        if report.state == CircuitBreakerState.NORMAL
+        else "yellow"
+        if report.state == CircuitBreakerState.CAUTION
+        else "red"
+    )
+    console.print(
+        Panel.fit(
+            f"Portfolio: [bold]{port.name}[/bold] (ID: `{port.id}`)\n"
+            f"Circuit Breaker Status: [{status_color}][bold]{report.state.value}[/bold][/{status_color}]\n"
+            f"Current Drawdown: {report.current_drawdown_pct * 100:.2f}%\n"
+            f"Gross Leverage: {report.leverage:.2f}x\n"
+            f"Margin Utilization: {report.margin_utilization_pct * 100:.1f}%\n"
+            f"Kill-Switch Active: {'[bold red]YES[/bold red]' if report.kill_switch_active else '[bold green]NO[/bold green]'}\n"
+            f"Active Alerts Count: {len(report.active_alerts)}",
+            title="Real-Time Risk Surveillance Monitor",
+        )
+    )
+
+    if report.active_alerts:
+        table = Table(title="Active Surveillance Alerts", show_header=True, header_style="bold red")
+        table.add_column("Severity", style="bold")
+        table.add_column("Rule")
+        table.add_column("Current")
+        table.add_column("Threshold")
+        table.add_column("Details")
+        for a in report.active_alerts:
+            table.add_row(
+                a.severity.value,
+                a.rule,
+                str(a.current_value),
+                str(a.threshold_value),
+                a.message,
+            )
+        console.print(table)
+
+
+@cli.command("orderbook")
+@click.option("--symbol", "-s", default="SPY", help="Asset ticker symbol")
+@click.option("--price", "-p", default=540.0, type=float, help="Reference spot price")
+@click.option("--levels", "-l", default=5, type=int, help="Depth levels to display")
+def orderbook_cmd(symbol: str, price: float, levels: int):
+    """Simulate and display Level 2 Order Book market depth."""
+    feed = MarketDataFeed()
+    feed.generate_synthetic_history(symbol=symbol, start_price=price, n_bars=10)
+    ob = feed.generate_order_book(symbol=symbol, levels=levels)
+
+    table = Table(
+        title=f"Level 2 Order Book Depth: {symbol} (Best Bid: {ob.best_bid}, Best Ask: {ob.best_ask})",
+        show_header=True,
+    )
+    table.add_column("Bid Orders", justify="right", style="dim")
+    table.add_column("Bid Size", justify="right", style="green")
+    table.add_column("Bid Price ($)", justify="right", style="bold green")
+    table.add_column("Ask Price ($)", justify="right", style="bold red")
+    table.add_column("Ask Size", justify="right", style="red")
+    table.add_column("Ask Orders", justify="right", style="dim")
+
+    for i in range(min(len(ob.bids), len(ob.asks))):
+        bid = ob.bids[i]
+        ask = ob.asks[i]
+        table.add_row(
+            str(bid.order_count),
+            f"{bid.size:,.0f}",
+            f"${bid.price:.2f}",
+            f"${ask.price:.2f}",
+            f"{ask.size:,.0f}",
+            str(ask.order_count),
+        )
+
+    console.print(table)
+
+
+@cli.command("report")
+@click.option("--portfolio", "-p", default="global-macro", help="Portfolio preset ID")
+@click.option("--output", "-o", default=None, help="Save markdown report to file path")
+def report_cmd(portfolio: str, output: Optional[str]):
+    """Generate institutional quantitative risk tearsheet."""
+    port = PortfolioRepository.get_portfolio(portfolio)
+    if not port:
+        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
+        raise click.Abort()
+
+    # Generate synthetic returns calibrated to portfolio
+    synthetic_returns = PortfolioRepository.generate_synthetic_returns(
+        n_days=750,
+        mean_daily=0.0003,
+        vol_daily=0.012,
+        fat_tailed=True,
+    )
+
+    var_res = VaRCalculator.evaluate_all(
+        returns=synthetic_returns,
+        portfolio_value=port.net_asset_value,
+    )
+
+    mc_engine = MonteCarloEngine(config=MonteCarloConfig(n_simulations=500, horizon_days=21))
+    mc_res = mc_engine.simulate_portfolio(port)
+
+    risk_engine = PortfolioRiskEngine()
+    scenarios = PortfolioRepository.get_stress_scenarios()
+    stress_res = [risk_engine.run_stress_test(port, sc) for sc in scenarios.values()]
+    comp_rep = risk_engine.check_compliance(port)
+
+    tearsheet = RiskReportGenerator.generate_markdown_tearsheet(
+        portfolio=port,
+        var_results=var_res,
+        monte_carlo_res=mc_res,
+        stress_results=stress_res,
+        compliance_report=comp_rep,
+    )
+
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(tearsheet)
+        console.print(f"[bold green]Tearsheet successfully saved to {output}[/bold green]")
+    else:
+        console.print(tearsheet)
 
 
 if __name__ == "__main__":

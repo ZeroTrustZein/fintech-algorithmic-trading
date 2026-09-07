@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 
 class AssetClass(str, Enum):
@@ -416,3 +418,298 @@ class DeltaGammaHedge(BaseModel):
     post_hedge_delta: float = 0.0
     post_hedge_gamma: float = 0.0
 
+
+# ============================================================================
+# Subsystem Models: Market Data, Execution, Strategy, Backtesting, Surveillance
+# ============================================================================
+
+
+class OrderType(str, Enum):
+    """Execution order classification."""
+
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    STOP_LOSS = "STOP_LOSS"
+    TWAP = "TWAP"
+    VWAP = "VWAP"
+
+
+class OrderStatus(str, Enum):
+    """Order lifecycle execution status."""
+
+    PENDING = "PENDING"
+    FILLED = "FILLED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+
+class TimeInForce(str, Enum):
+    """Order validity and expiration policy."""
+
+    GTC = "GTC"  # Good Till Cancelled
+    IOC = "IOC"  # Immediate or Cancel
+    FOK = "FOK"  # Fill or Kill
+    DAY = "DAY"  # Good for Day
+
+
+class Bar(BaseModel):
+    """Standard OHLCV market candlestick bar."""
+
+    symbol: str
+    timestamp: datetime
+    open: float = Field(gt=0)
+    high: float = Field(gt=0)
+    low: float = Field(gt=0)
+    close: float = Field(gt=0)
+    volume: float = Field(ge=0)
+
+    @field_validator("high")
+    @classmethod
+    def high_ge_low_and_open_close(cls, v: float, info: ValidationInfo) -> float:
+        data = info.data
+        if "low" in data and v < data["low"]:
+            raise ValueError(f"High {v} cannot be less than low {data['low']}")
+        return v
+
+
+class Quote(BaseModel):
+    """Top-of-book market quote."""
+
+    symbol: str
+    timestamp: datetime
+    bid: float = Field(gt=0)
+    ask: float = Field(gt=0)
+    bid_size: float = Field(default=100.0, ge=0)
+    ask_size: float = Field(default=100.0, ge=0)
+
+    @property
+    def mid_price(self) -> float:
+        return (self.bid + self.ask) / 2.0
+
+    @property
+    def spread(self) -> float:
+        return self.ask - self.bid
+
+    @property
+    def spread_bps(self) -> float:
+        return (self.spread / self.mid_price) * 10000.0 if self.mid_price > 0 else 0.0
+
+
+class OrderBookLevel(BaseModel):
+    """Individual price level depth on order book."""
+
+    price: float = Field(gt=0)
+    size: float = Field(gt=0)
+    order_count: int = Field(default=1, ge=1)
+
+
+class OrderBookDepth(BaseModel):
+    """Aggregated Level 2 depth snapshot."""
+
+    symbol: str
+    timestamp: datetime
+    bids: List[OrderBookLevel] = Field(default_factory=list)
+    asks: List[OrderBookLevel] = Field(default_factory=list)
+
+    @property
+    def best_bid(self) -> Optional[float]:
+        return self.bids[0].price if self.bids else None
+
+    @property
+    def best_ask(self) -> Optional[float]:
+        return self.asks[0].price if self.asks else None
+
+    @property
+    def total_bid_depth(self) -> float:
+        return sum(level.size for level in self.bids)
+
+    @property
+    def total_ask_depth(self) -> float:
+        return sum(level.size for level in self.asks)
+
+
+class Order(BaseModel):
+    """Institutional trade order definition."""
+
+    id: str = Field(default_factory=lambda: f"ord-{uuid.uuid4().hex[:10]}")
+    symbol: str
+    side: OrderSide
+    order_type: OrderType
+    quantity: float = Field(gt=0)
+    price: Optional[float] = Field(default=None, gt=0)
+    stop_price: Optional[float] = Field(default=None, gt=0)
+    time_in_force: TimeInForce = TimeInForce.GTC
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    status: OrderStatus = OrderStatus.PENDING
+    filled_quantity: float = 0.0
+    avg_fill_price: float = 0.0
+    rejection_reason: Optional[str] = None
+
+
+class Fill(BaseModel):
+    """Individual trade execution fill report."""
+
+    fill_id: str = Field(default_factory=lambda: f"fill-{uuid.uuid4().hex[:10]}")
+    order_id: str
+    symbol: str
+    side: OrderSide
+    quantity: float = Field(gt=0)
+    price: float = Field(gt=0)
+    commission: float = 0.0
+    slippage: float = 0.0
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ExecutionReport(BaseModel):
+    """Consolidated execution response for order routing."""
+
+    order_id: str
+    symbol: str
+    status: OrderStatus
+    filled_quantity: float
+    remaining_quantity: float
+    avg_fill_price: float
+    total_commission: float
+    total_slippage: float
+    fills: List[Fill] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    rejection_reason: Optional[str] = None
+
+
+class SignalDirection(str, Enum):
+    """Alpha trading signal stance."""
+
+    LONG = "LONG"
+    SHORT = "SHORT"
+    FLAT = "FLAT"
+
+
+class StrategySignal(BaseModel):
+    """Quantitative alpha generation signal."""
+
+    strategy_id: str
+    symbol: str
+    direction: SignalDirection
+    strength: float = Field(default=1.0, ge=-1.0, le=1.0)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    target_weight: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    rationale: str = ""
+    metadata: Dict[str, float] = Field(default_factory=dict)
+
+
+class TargetAllocation(BaseModel):
+    """Target portfolio position allocation from strategy composite."""
+
+    symbol: str
+    target_weight: float
+    target_shares: float
+    current_shares: float
+    shares_delta: float
+    reason: str = ""
+
+
+class BacktestConfig(BaseModel):
+    """Configuration parameter set for historical backtesting."""
+
+    initial_capital: float = Field(default=1_000_000.0, gt=0)
+    commission_bps: float = Field(default=5.0, ge=0)  # 5 bps = 0.05%
+    slippage_bps: float = Field(default=2.5, ge=0)  # 2.5 bps
+    risk_free_rate: float = Field(default=0.045, ge=0)
+    annualization_factor: int = Field(default=252, gt=0)
+
+
+class BacktestTrade(BaseModel):
+    """Completed round-trip or historical position trade in backtest."""
+
+    trade_id: str = Field(default_factory=lambda: f"trade-{uuid.uuid4().hex[:8]}")
+    symbol: str
+    side: OrderSide
+    quantity: float
+    entry_price: float
+    exit_price: float
+    entry_time: datetime
+    exit_time: datetime
+    pnl: float
+    return_pct: float
+    commission: float
+    holding_period_bars: int
+
+
+class BacktestMetrics(BaseModel):
+    """Institutional performance and risk analytics from backtest."""
+
+    total_return_pct: float
+    annualized_return: float
+    annualized_volatility: float
+    sharpe_ratio: float
+    sortino_ratio: float
+    calmar_ratio: float
+    max_drawdown_pct: float
+    max_drawdown_duration_bars: int
+    win_rate: float
+    profit_factor: float
+    expectancy: float
+    total_trades: int
+    profitable_trades: int
+    loss_making_trades: int
+
+
+class BacktestResult(BaseModel):
+    """Full backtest execution record and time series."""
+
+    config: BacktestConfig
+    initial_capital: float
+    final_capital: float
+    equity_curve: List[float]
+    daily_returns: List[float]
+    trades: List[BacktestTrade]
+    metrics: BacktestMetrics
+    rolling_var_95: List[float] = Field(default_factory=list)
+    computation_time_ms: float = 0.0
+
+
+class AlertSeverity(str, Enum):
+    """Risk surveillance alert classification."""
+
+    INFO = "INFO"
+    WARNING = "WARNING"
+    CRITICAL = "CRITICAL"
+    EMERGENCY_KILL_SWITCH = "EMERGENCY_KILL_SWITCH"
+
+
+class RiskAlert(BaseModel):
+    """Real-time risk surveillance notification event."""
+
+    alert_id: str = Field(default_factory=lambda: f"alert-{uuid.uuid4().hex[:8]}")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    severity: AlertSeverity
+    component: str
+    rule: str
+    message: str
+    current_value: float
+    threshold_value: float
+    action_taken: Optional[str] = None
+
+
+class CircuitBreakerState(str, Enum):
+    """Trading system risk gating state."""
+
+    NORMAL = "NORMAL"
+    CAUTION = "CAUTION"
+    HALTED = "HALTED"
+
+
+class SurveillanceReport(BaseModel):
+    """Consolidated real-time risk surveillance audit snapshot."""
+
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    portfolio_id: str
+    state: CircuitBreakerState
+    active_alerts: List[RiskAlert] = Field(default_factory=list)
+    current_drawdown_pct: float
+    margin_utilization_pct: float
+    leverage: float
+    kill_switch_active: bool
+    remedial_instructions: List[str] = Field(default_factory=list)

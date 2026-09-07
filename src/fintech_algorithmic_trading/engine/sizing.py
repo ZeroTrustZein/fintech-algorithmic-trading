@@ -129,9 +129,7 @@ class PositionSizer:
             return {}
 
         inv_vols = {
-            sym: (1.0 / max(1e-4, vol))
-            for sym, vol in asset_vols_annual.items()
-            if vol > 0
+            sym: (1.0 / max(1e-4, vol)) for sym, vol in asset_vols_annual.items() if vol > 0
         }
         total_inv = sum(inv_vols.values())
         if total_inv <= 0:

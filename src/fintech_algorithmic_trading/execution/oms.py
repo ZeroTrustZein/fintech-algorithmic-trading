@@ -109,11 +109,14 @@ class PreTradeRiskGatekeeper:
             (p for p in portfolio.positions if p.asset.symbol == order.symbol), None
         )
         existing_val = existing_pos.market_value if existing_pos else 0.0
-        post_trade_val = (
-            existing_val + order_notional
-            if order.side == OrderSide.BUY
-            else abs(existing_val - order_notional)
-        )
+        # If buying to cover a short, position value decreases or flips
+        if existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY:
+            post_trade_val = abs(existing_val - order_notional)
+        elif existing_pos and existing_pos.side == PositionType.LONG and order.side == OrderSide.SELL:
+            post_trade_val = abs(existing_val - order_notional)
+        else:
+            post_trade_val = existing_val + order_notional
+
         post_trade_pct = post_trade_val / nav
         if post_trade_pct > self.risk_limits.max_single_position_pct:
             max_allowed_val = nav * self.risk_limits.max_single_position_pct
@@ -126,7 +129,12 @@ class PreTradeRiskGatekeeper:
             )
 
         # 4. Post-trade leverage limit
-        post_gross = portfolio.gross_exposure + order_notional
+        if (existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY) or (
+            existing_pos and existing_pos.side == PositionType.LONG and order.side == OrderSide.SELL
+        ):
+            post_gross = max(0.0, portfolio.gross_exposure - min(existing_val, order_notional))
+        else:
+            post_gross = portfolio.gross_exposure + order_notional
         post_leverage = post_gross / nav
         if post_leverage > self.risk_limits.max_leverage:
             return (
@@ -288,7 +296,11 @@ class OrderManagementSystem:
             )
             fills.append(f)
 
+        if order.id not in self.fills:
+            self.fills[order.id] = []
         self.fills[order.id].extend(fills)
+        if order.id not in self.orders:
+            self.orders[order.id] = order
 
         # Aggregate fill execution
         tot_qty = sum(f.quantity for f in fills)

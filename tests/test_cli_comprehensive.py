@@ -2,6 +2,7 @@
 
 import json
 import os
+
 from click.testing import CliRunner
 
 from fintech_algorithmic_trading import __main__ as pkg_main

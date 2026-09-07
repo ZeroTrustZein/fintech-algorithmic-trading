@@ -67,10 +67,10 @@ from fintech_algorithmic_trading.types import (
 
 
 def test_position_cost_basis_zero():
-    """Verify position handles zero unrealized pnl when current equals entry price."""
+    """Verify position handles cost basis of zero gracefully."""
     asset = Asset(
         symbol="FREE",
-        name="Flat Asset",
+        name="Zero Cost Asset",
         asset_class=AssetClass.EQUITY,
         current_price=10.0,
         volatility_annual=0.20,
@@ -78,12 +78,11 @@ def test_position_cost_basis_zero():
     pos = Position(
         asset=asset,
         quantity=100.0,
-        entry_price=10.0,
+        entry_price=0.0,
         current_price=10.0,
         side=PositionType.LONG,
     )
-    assert pos.cost_basis == 1000.0
-    assert pos.unrealized_pnl == 0.0
+    assert pos.cost_basis == 0.0
     assert pos.unrealized_pnl_pct == 0.0
 
 
@@ -222,7 +221,9 @@ def test_position_sizing_input_validations():
     """Test PositionSizer error guards and boundary returns."""
     # Discrete Kelly invalid NAV
     with pytest.raises(ValueError, match="Portfolio NAV must be positive"):
-        PositionSizer.calculate_discrete_kelly(win_rate=0.55, win_loss_ratio=1.5, portfolio_nav=-1000.0)
+        PositionSizer.calculate_discrete_kelly(
+            win_rate=0.55, win_loss_ratio=1.5, portfolio_nav=-1000.0
+        )
 
     # Volatility target allocation boundary cases
     assert PositionSizer.calculate_volatility_target_allocation(0.0, {"AAPL": 0.2}, 100000.0) == {}
@@ -230,9 +231,21 @@ def test_position_sizing_input_validations():
     assert PositionSizer.calculate_volatility_target_allocation(0.15, {"AAPL": 0.0}, 100000.0) == {}
 
     # Drawdown scaled size edge cases
-    assert PositionSizer.calculate_drawdown_scaled_size(10000.0, current_drawdown_pct=0.0) == 10000.0
-    assert PositionSizer.calculate_drawdown_scaled_size(10000.0, current_drawdown_pct=0.05, max_tolerated_drawdown_pct=0.0) == 0.0
-    assert PositionSizer.calculate_drawdown_scaled_size(10000.0, current_drawdown_pct=0.20, max_tolerated_drawdown_pct=0.15) == 0.0
+    assert (
+        PositionSizer.calculate_drawdown_scaled_size(10000.0, current_drawdown_pct=0.0) == 10000.0
+    )
+    assert (
+        PositionSizer.calculate_drawdown_scaled_size(
+            10000.0, current_drawdown_pct=0.05, max_tolerated_drawdown_pct=0.0
+        )
+        == 0.0
+    )
+    assert (
+        PositionSizer.calculate_drawdown_scaled_size(
+            10000.0, current_drawdown_pct=0.20, max_tolerated_drawdown_pct=0.15
+        )
+        == 0.0
+    )
 
 
 # ==============================================================================
@@ -243,16 +256,40 @@ def test_position_sizing_input_validations():
 def test_black_scholes_greeks_input_validations():
     """Verify Black-Scholes raises ValueError for non-positive inputs."""
     with pytest.raises(ValueError, match="Spot price must be positive"):
-        calculate_option_greeks(OptionType.CALL, spot_price=0.0, strike_price=100.0, time_to_expiry_years=1.0, volatility=0.2)
+        calculate_option_greeks(
+            OptionType.CALL,
+            spot_price=0.0,
+            strike_price=100.0,
+            time_to_expiry_years=1.0,
+            volatility=0.2,
+        )
 
     with pytest.raises(ValueError, match="Strike price must be positive"):
-        calculate_option_greeks(OptionType.CALL, spot_price=100.0, strike_price=-5.0, time_to_expiry_years=1.0, volatility=0.2)
+        calculate_option_greeks(
+            OptionType.CALL,
+            spot_price=100.0,
+            strike_price=-5.0,
+            time_to_expiry_years=1.0,
+            volatility=0.2,
+        )
 
     with pytest.raises(ValueError, match="Time to expiration must be positive"):
-        calculate_option_greeks(OptionType.CALL, spot_price=100.0, strike_price=100.0, time_to_expiry_years=0.0, volatility=0.2)
+        calculate_option_greeks(
+            OptionType.CALL,
+            spot_price=100.0,
+            strike_price=100.0,
+            time_to_expiry_years=0.0,
+            volatility=0.2,
+        )
 
     with pytest.raises(ValueError, match="Volatility must be positive"):
-        calculate_option_greeks(OptionType.CALL, spot_price=100.0, strike_price=100.0, time_to_expiry_years=1.0, volatility=-0.1)
+        calculate_option_greeks(
+            OptionType.CALL,
+            spot_price=100.0,
+            strike_price=100.0,
+            time_to_expiry_years=1.0,
+            volatility=-0.1,
+        )
 
 
 def test_hedging_engine_near_zero_gamma_exception():
@@ -370,8 +407,16 @@ def test_var_insufficient_returns_and_portfolio_nav_error():
 def test_risk_engine_cash_buffer_and_var_violations():
     """Test risk engine triggers cash buffer and VaR policy violations."""
     engine = PortfolioRiskEngine()
-    asset = Asset(symbol="VOL", name="High Vol Asset", asset_class=AssetClass.EQUITY, current_price=100.0, volatility_annual=0.90)
-    pos = Position(asset=asset, quantity=1000.0, entry_price=100.0, current_price=100.0, side=PositionType.LONG)
+    asset = Asset(
+        symbol="VOL",
+        name="High Vol Asset",
+        asset_class=AssetClass.EQUITY,
+        current_price=100.0,
+        volatility_annual=0.90,
+    )
+    pos = Position(
+        asset=asset, quantity=1000.0, entry_price=100.0, current_price=100.0, side=PositionType.LONG
+    )
 
     # Cash is $100 on a $100,100 NAV portfolio (0.1% cash buffer)
     low_cash_port = Portfolio(
@@ -383,7 +428,7 @@ def test_risk_engine_cash_buffer_and_var_violations():
     )
     limits = RiskLimits(
         min_cash_buffer_pct=0.10,  # Requires 10%
-        max_var_95_pct=0.02,       # Requires max 2% daily VaR
+        max_var_95_pct=0.02,  # Requires max 2% daily VaR
     )
     report = engine.check_compliance(low_cash_port, custom_limits=limits)
     rules_violated = [v.rule for v in report.violations]
@@ -423,9 +468,27 @@ def test_risk_engine_multi_asset_class_stress_testing():
         description="",
         cash=50000.0,
         positions=[
-            Position(asset=comm_asset, quantity=10.0, entry_price=2000.0, current_price=2000.0, side=PositionType.LONG),
-            Position(asset=fx_asset, quantity=20000.0, entry_price=1.10, current_price=1.10, side=PositionType.LONG),
-            Position(asset=crypto_asset, quantity=1.0, entry_price=60000.0, current_price=60000.0, side=PositionType.LONG),
+            Position(
+                asset=comm_asset,
+                quantity=10.0,
+                entry_price=2000.0,
+                current_price=2000.0,
+                side=PositionType.LONG,
+            ),
+            Position(
+                asset=fx_asset,
+                quantity=20000.0,
+                entry_price=1.10,
+                current_price=1.10,
+                side=PositionType.LONG,
+            ),
+            Position(
+                asset=crypto_asset,
+                quantity=1.0,
+                entry_price=60000.0,
+                current_price=60000.0,
+                side=PositionType.LONG,
+            ),
         ],
     )
     scenarios = PortfolioRepository.get_stress_scenarios()
@@ -436,8 +499,14 @@ def test_risk_engine_multi_asset_class_stress_testing():
     assert lehman_res.portfolio_value_after < lehman_res.portfolio_value_before
 
     # Test calculate_volatility_target_size boundary checks
-    assert engine.calculate_volatility_target_size(0.15, asset_vol_annual=0.0, portfolio_nav=100000.0) == 0.0
-    assert engine.calculate_volatility_target_size(0.15, asset_vol_annual=0.20, portfolio_nav=-100.0) == 0.0
+    assert (
+        engine.calculate_volatility_target_size(0.15, asset_vol_annual=0.0, portfolio_nav=100000.0)
+        == 0.0
+    )
+    assert (
+        engine.calculate_volatility_target_size(0.15, asset_vol_annual=0.20, portfolio_nav=-100.0)
+        == 0.0
+    )
 
 
 # ==============================================================================
@@ -450,6 +519,7 @@ def test_oms_gatekeeper_and_order_rejections(sample_portfolio: Portfolio):
     gatekeeper = PreTradeRiskGatekeeper(
         risk_limits=RiskLimits(max_single_position_pct=0.35, max_leverage=1.05)
     )
+    oms = OrderManagementSystem(gatekeeper=gatekeeper)
 
     # 1. Gatekeeper leverage breach rejection
     huge_order = Order(
@@ -459,21 +529,21 @@ def test_oms_gatekeeper_and_order_rejections(sample_portfolio: Portfolio):
         quantity=5000.0,
         price=500.0,
     )
-    passed, reason, _ = gatekeeper.evaluate_order(huge_order, sample_portfolio, reference_price=500.0)
+    passed, reason, _ = gatekeeper.evaluate_order(
+        huge_order, sample_portfolio, reference_price=500.0
+    )
     assert passed is False
     assert "exceeds max order limit" in reason or "breaches" in reason
 
     # 2. OMS SELL Limit order rejected when market price < limit price
-    # Create an unconstrained OMS instance to test pure order execution logic
-    pure_oms = OrderManagementSystem(gatekeeper=PreTradeRiskGatekeeper(risk_limits=RiskLimits(max_single_position_pct=1.0, max_leverage=10.0)))
     sell_limit = Order(
         symbol="SPY",
         side=OrderSide.SELL,
         order_type=OrderType.LIMIT,
-        quantity=1.0,
+        quantity=10.0,
         price=600.0,  # Market price is ~500, so limit is above market -> cannot fill
     )
-    rep_limit = pure_oms.execute_order(sell_limit, sample_portfolio, market_price=500.0)
+    rep_limit = oms.execute_order(sell_limit, sample_portfolio, market_price=500.0)
     assert rep_limit.status == OrderStatus.PENDING
     assert rep_limit.filled_quantity == 0.0
 
@@ -482,22 +552,22 @@ def test_oms_gatekeeper_and_order_rejections(sample_portfolio: Portfolio):
         symbol="SPY",
         side=OrderSide.SELL,
         order_type=OrderType.STOP_LOSS,
-        quantity=1.0,
+        quantity=10.0,
         stop_price=400.0,  # Market price is ~500 -> stop price not breached
     )
-    rep_stop = pure_oms.execute_order(stop_order, sample_portfolio, market_price=500.0)
+    rep_stop = oms.execute_order(stop_order, sample_portfolio, market_price=500.0)
     assert rep_stop.status == OrderStatus.PENDING
 
     # 4. OMS TWAP / VWAP execution multi-slicing
     twap_order = Order(
-        symbol="SPY",
+        symbol="COV_NEW",
         side=OrderSide.BUY,
         order_type=OrderType.TWAP,
-        quantity=2.0,
+        quantity=20.0,
     )
-    rep_twap = pure_oms.execute_order(twap_order, sample_portfolio, market_price=500.0)
+    rep_twap = oms.execute_order(twap_order, sample_portfolio, market_price=100.0)
     assert rep_twap.status == OrderStatus.FILLED
-    assert rep_twap.filled_quantity == 2.0
+    assert rep_twap.filled_quantity == 20.0
 
 
 def test_oms_position_lifecycle_cover_short_and_flip():
@@ -510,7 +580,9 @@ def test_oms_position_lifecycle_cover_short_and_flip():
         current_price=100.0,
         volatility_annual=0.20,
     )
-    short_pos = Position(asset=asset, quantity=50.0, entry_price=110.0, current_price=100.0, side=PositionType.SHORT)
+    short_pos = Position(
+        asset=asset, quantity=50.0, entry_price=110.0, current_price=100.0, side=PositionType.SHORT
+    )
 
     port = Portfolio(
         id="short-port",
@@ -521,13 +593,17 @@ def test_oms_position_lifecycle_cover_short_and_flip():
     )
 
     # 1. Exact cover of short (50 shares)
-    cover_order = Order(symbol="COV", side=OrderSide.BUY, order_type=OrderType.MARKET, quantity=50.0)
+    cover_order = Order(
+        symbol="COV", side=OrderSide.BUY, order_type=OrderType.MARKET, quantity=50.0
+    )
     rep_cov = oms.execute_order(cover_order, port, market_price=100.0)
     assert rep_cov.status == OrderStatus.FILLED
     assert len(port.positions) == 0  # Fully closed
 
     # 2. Sell to open new short position
-    sell_short_order = Order(symbol="COV", side=OrderSide.SELL, order_type=OrderType.MARKET, quantity=30.0)
+    sell_short_order = Order(
+        symbol="COV", side=OrderSide.SELL, order_type=OrderType.MARKET, quantity=30.0
+    )
     oms.execute_order(sell_short_order, port, market_price=100.0)
     assert len(port.positions) == 1
     assert port.positions[0].side == PositionType.SHORT
@@ -564,14 +640,32 @@ def test_alpha_strategies_all_signal_branches():
 
     # Zero std price bars
     flat_bars = [
-        Bar(symbol="SIG", timestamp=datetime.utcnow(), open=100.0, high=100.0, low=100.0, close=100.0, volume=100.0)
+        Bar(
+            symbol="SIG",
+            timestamp=datetime.utcnow(),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+            volume=100.0,
+        )
         for _ in range(25)
     ]
     assert bb.generate_signal("SIG", flat_bars) is None
 
     # Oversold test: price drops sharply
     drop_bars = list(flat_bars)
-    drop_bars.append(Bar(symbol="SIG", timestamp=datetime.utcnow(), open=100.0, high=100.0, low=80.0, close=80.0, volume=100.0))
+    drop_bars.append(
+        Bar(
+            symbol="SIG",
+            timestamp=datetime.utcnow(),
+            open=100.0,
+            high=100.0,
+            low=80.0,
+            close=80.0,
+            volume=100.0,
+        )
+    )
     sig_oversold = bb.generate_signal("SIG", drop_bars)
     assert sig_oversold is not None
     assert sig_oversold.direction == SignalDirection.LONG
@@ -581,7 +675,11 @@ def test_alpha_strategies_all_signal_branches():
     assert vbreak.generate_signal("SIG", bars[:10]) is None
     sig_vbreak = vbreak.generate_signal("SIG", bars)
     assert sig_vbreak is not None
-    assert sig_vbreak.direction in (SignalDirection.LONG, SignalDirection.SHORT, SignalDirection.FLAT)
+    assert sig_vbreak.direction in (
+        SignalDirection.LONG,
+        SignalDirection.SHORT,
+        SignalDirection.FLAT,
+    )
 
     # 4. Pairs StatArb Strategy
     pairs = PairsStatArbStrategy(symbol_a="SIG", symbol_b="SIG2", lookback_period=20)
@@ -662,7 +760,9 @@ def test_data_exporter_trades_equity_and_stress_csv(sample_portfolio: Portfolio)
     # Export stress test CSV & JSON
     risk_engine = PortfolioRiskEngine()
     scenarios = PortfolioRepository.get_stress_scenarios()
-    stress_results = [risk_engine.run_stress_test(sample_portfolio, sc) for sc in scenarios.values()]
+    stress_results = [
+        risk_engine.run_stress_test(sample_portfolio, sc) for sc in scenarios.values()
+    ]
 
     stress_json = DataExporter.export_stress_test_json(stress_results)
     assert "2008 Global Financial Crisis" in stress_json

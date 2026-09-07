@@ -118,7 +118,9 @@ class PreTradeRiskGatekeeper:
                 post_trade_val = existing_val - order_notional
             else:
                 post_trade_val = order_notional - existing_val
-        elif existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY:
+        elif (
+            existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY
+        ):
             if order_notional <= existing_val:
                 is_risk_reducing = True
                 post_trade_val = existing_val - order_notional

@@ -12,6 +12,7 @@ from fintech_algorithmic_trading.types import (
     MonteCarloConfig,
     MonteCarloResult,
     Portfolio,
+    PositionType,
 )
 
 
@@ -42,7 +43,10 @@ class MonteCarloEngine:
         positions = portfolio.positions
         n_assets = len(positions)
         s0 = np.array([p.current_price for p in positions], dtype=np.float64)
-        quantities = np.array([p.quantity for p in positions], dtype=np.float64)
+        quantities = np.array(
+            [p.quantity if p.side == PositionType.LONG else -p.quantity for p in positions],
+            dtype=np.float64,
+        )
         vols = np.array([p.asset.volatility_annual for p in positions], dtype=np.float64)
         rf = self.config.risk_free_rate
 

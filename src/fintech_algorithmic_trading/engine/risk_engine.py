@@ -11,6 +11,7 @@ from fintech_algorithmic_trading.types import (
     AssetClass,
     KellySizingResult,
     Portfolio,
+    PositionType,
     RiskComplianceReport,
     RiskLimits,
     RiskViolation,
@@ -175,7 +176,7 @@ class PortfolioRiskEngine:
                 shock_pct = scenario.equity_shock_pct * 0.5
 
             # Position PnL impact
-            if pos.side.value == "LONG":
+            if pos.side == PositionType.LONG:
                 pnl = pos.market_value * shock_pct
             else:
                 pnl = -pos.market_value * shock_pct

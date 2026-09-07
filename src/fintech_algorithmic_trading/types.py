@@ -83,7 +83,7 @@ class Position(BaseModel):
 
     asset: Asset
     quantity: float = Field(gt=0, description="Units held")
-    entry_price: float = Field(gt=0, description="Average entry cost")
+    entry_price: float = Field(ge=0, description="Average entry cost")
     current_price: float = Field(gt=0, description="Current market price")
     side: PositionType = PositionType.LONG
 

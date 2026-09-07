@@ -109,16 +109,26 @@ class PreTradeRiskGatekeeper:
             (p for p in portfolio.positions if p.asset.symbol == order.symbol), None
         )
         existing_val = existing_pos.market_value if existing_pos else 0.0
-        # If buying to cover a short, position value decreases or flips
-        if existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY:
-            post_trade_val = abs(existing_val - order_notional)
-        elif existing_pos and existing_pos.side == PositionType.LONG and order.side == OrderSide.SELL:
-            post_trade_val = abs(existing_val - order_notional)
+
+        # Determine if order reduces or expands position
+        is_risk_reducing = False
+        if existing_pos and existing_pos.side == PositionType.LONG and order.side == OrderSide.SELL:
+            if order_notional <= existing_val:
+                is_risk_reducing = True
+                post_trade_val = existing_val - order_notional
+            else:
+                post_trade_val = order_notional - existing_val
+        elif existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY:
+            if order_notional <= existing_val:
+                is_risk_reducing = True
+                post_trade_val = existing_val - order_notional
+            else:
+                post_trade_val = order_notional - existing_val
         else:
             post_trade_val = existing_val + order_notional
 
         post_trade_pct = post_trade_val / nav
-        if post_trade_pct > self.risk_limits.max_single_position_pct:
+        if post_trade_pct > self.risk_limits.max_single_position_pct and not is_risk_reducing:
             max_allowed_val = nav * self.risk_limits.max_single_position_pct
             room_val = max(0.0, max_allowed_val - existing_val)
             scaled_qty = math.floor(room_val / reference_price)
@@ -129,14 +139,18 @@ class PreTradeRiskGatekeeper:
             )
 
         # 4. Post-trade leverage limit
-        if (existing_pos and existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY) or (
-            existing_pos and existing_pos.side == PositionType.LONG and order.side == OrderSide.SELL
+        if is_risk_reducing:
+            post_gross = max(0.0, portfolio.gross_exposure - order_notional)
+        elif existing_pos and (
+            (existing_pos.side == PositionType.LONG and order.side == OrderSide.SELL)
+            or (existing_pos.side == PositionType.SHORT and order.side == OrderSide.BUY)
         ):
-            post_gross = max(0.0, portfolio.gross_exposure - min(existing_val, order_notional))
+            post_gross = max(0.0, portfolio.gross_exposure - existing_val + post_trade_val)
         else:
             post_gross = portfolio.gross_exposure + order_notional
+
         post_leverage = post_gross / nav
-        if post_leverage > self.risk_limits.max_leverage:
+        if post_leverage > self.risk_limits.max_leverage and not is_risk_reducing:
             return (
                 False,
                 f"Projected leverage {post_leverage:.2f}x breaches policy ceiling {self.risk_limits.max_leverage:.2f}x.",

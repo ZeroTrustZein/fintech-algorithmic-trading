@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from typing import Optional
 
@@ -16,8 +18,9 @@ from fintech_algorithmic_trading.engine.greeks import calculate_option_greeks
 from fintech_algorithmic_trading.engine.monte_carlo import MonteCarloEngine
 from fintech_algorithmic_trading.engine.risk_engine import PortfolioRiskEngine
 from fintech_algorithmic_trading.engine.var import VaRCalculator
-from fintech_algorithmic_trading.reporting import RiskReportGenerator
+from fintech_algorithmic_trading.reporting import DataExporter, RiskReportGenerator
 from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
 from fintech_algorithmic_trading.strategy import (
     AlphaStrategy,
     CompositeAlphaAggregator,
@@ -30,6 +33,7 @@ from fintech_algorithmic_trading.types import (
     BacktestConfig,
     CircuitBreakerState,
     DriftModel,
+    ExportType,
     MonteCarloConfig,
     OptionType,
     RiskLimits,

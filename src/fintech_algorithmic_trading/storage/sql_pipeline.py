@@ -6,9 +6,12 @@ import csv
 import io
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from fintech_algorithmic_trading.types import (
+    Asset,
+    AssetClass,
+    BacktestTrade,
     CleanEquityRecord,
     CleanPositionRecord,
     CleanTradeRecord,
@@ -16,6 +19,10 @@ from fintech_algorithmic_trading.types import (
     ExportValidationError,
     ExportValidationRule,
     ExportValidationSummary,
+    OrderSide,
+    Portfolio,
+    Position,
+    PositionType,
     RawEquityCurveExport,
     RawPositionExport,
     RawTradeExport,
@@ -270,7 +277,7 @@ class PostgreSQLExportPipeline:
     @classmethod
     def process_trades(
         cls,
-        records: List[Union[Dict[str, Any], RawTradeExport]],
+        records: Sequence[Union[Dict[str, Any], RawTradeExport]],
         deduplicate: bool = True,
     ) -> Tuple[List[CleanTradeRecord], ExportValidationSummary]:
         """Batch clean, validate, and deduplicate raw trade export records."""
@@ -329,7 +336,7 @@ class PostgreSQLExportPipeline:
     @classmethod
     def process_positions(
         cls,
-        records: List[Union[Dict[str, Any], RawPositionExport]],
+        records: Sequence[Union[Dict[str, Any], RawPositionExport]],
         deduplicate: bool = True,
     ) -> Tuple[List[CleanPositionRecord], ExportValidationSummary]:
         """Batch clean, validate, and deduplicate raw position export records."""
@@ -394,7 +401,7 @@ class PostgreSQLExportPipeline:
     @classmethod
     def process_equity_curve(
         cls,
-        records: List[Union[Dict[str, Any], RawEquityCurveExport]],
+        records: Sequence[Union[Dict[str, Any], RawEquityCurveExport]],
         deduplicate: bool = True,
     ) -> Tuple[List[CleanEquityRecord], ExportValidationSummary]:
         """Batch clean, validate, and deduplicate raw equity curve export records."""
@@ -586,3 +593,77 @@ class PostgreSQLExportPipeline:
             )
         finally:
             cursor.close()
+
+    @classmethod
+    def reconstruct_portfolio(
+        cls,
+        portfolio_id: str,
+        clean_positions: List[CleanPositionRecord],
+        name: Optional[str] = None,
+        cash: float = 0.0,
+    ) -> Portfolio:
+        """Reconstruct a domain Portfolio model from cleaned position export records."""
+        positions: List[Position] = []
+        for p in clean_positions:
+            ac_val = p.asset_class.upper() if isinstance(p.asset_class, str) else str(p.asset_class)
+            try:
+                ac = AssetClass(ac_val)
+            except ValueError:
+                ac = AssetClass.EQUITY
+
+            side_val = p.side.upper() if isinstance(p.side, str) else str(p.side)
+            side = PositionType.LONG if side_val in ("LONG", "BUY") else PositionType.SHORT
+
+            asset = Asset(
+                symbol=p.symbol,
+                name=p.name,
+                asset_class=ac,
+                sector=p.sector,
+                current_price=p.current_price,
+                volatility_annual=0.20,
+            )
+            positions.append(
+                Position(
+                    asset=asset,
+                    quantity=p.quantity,
+                    entry_price=p.entry_price,
+                    current_price=p.current_price,
+                    side=side,
+                )
+            )
+        return Portfolio(
+            id=portfolio_id,
+            name=name or f"Portfolio {portfolio_id}",
+            description=f"Reconstructed from PostgreSQL clean exports for {portfolio_id}",
+            cash=cash,
+            positions=positions,
+        )
+
+    @classmethod
+    def reconstruct_trades(
+        cls,
+        clean_trades: List[CleanTradeRecord],
+    ) -> List[BacktestTrade]:
+        """Reconstruct domain BacktestTrade models from cleaned trade export records."""
+        trades: List[BacktestTrade] = []
+        for t in clean_trades:
+            side_val = t.side.upper() if isinstance(t.side, str) else str(t.side)
+            side = OrderSide.BUY if side_val in ("BUY", "LONG") else OrderSide.SELL
+            trades.append(
+                BacktestTrade(
+                    trade_id=t.trade_id,
+                    symbol=t.symbol,
+                    side=side,
+                    quantity=t.quantity,
+                    entry_price=t.entry_price,
+                    exit_price=t.exit_price,
+                    entry_time=t.entry_time,
+                    exit_time=t.exit_time,
+                    pnl=t.pnl,
+                    return_pct=t.return_pct,
+                    commission=t.commission,
+                    holding_period_bars=t.holding_period_bars,
+                )
+            )
+        return trades
+

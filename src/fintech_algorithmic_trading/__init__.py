@@ -22,6 +22,7 @@ from fintech_algorithmic_trading.execution import (
 )
 from fintech_algorithmic_trading.reporting import DataExporter, RiskReportGenerator
 from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
 from fintech_algorithmic_trading.strategy import (
     AlphaStrategy,
     CompositeAlphaAggregator,
@@ -133,6 +134,7 @@ __all__ = [
     "Position",
     "PositionSizer",
     "PositionType",
+    "PostgreSQLExportPipeline",
     "PreTradeRiskGatekeeper",
     "Quote",
     "RiskAlert",

@@ -39,7 +39,7 @@ where = ["src"]
 include = ["fintech_algorithmic_trading*"]
 
 [tool.setuptools.package-data]
-fintech_algorithmic_trading = ["py.typed"]
+fintech_algorithmic_trading = ["py.typed", "storage/sql/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

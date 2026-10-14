@@ -1,6 +1,7 @@
 """Test suite for PostgreSQL raw export cleaning and validation domain types (Stage 2: Types)."""
 
 from datetime import datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
@@ -19,14 +20,32 @@ from fintech_algorithmic_trading import (
 )
 from fintech_algorithmic_trading.storage import (
     CleanEquityRecord as StorageCleanEquity,
+)
+from fintech_algorithmic_trading.storage import (
     CleanPositionRecord as StorageCleanPosition,
+)
+from fintech_algorithmic_trading.storage import (
     CleanTradeRecord as StorageCleanTrade,
+)
+from fintech_algorithmic_trading.storage import (
     ExportType as StorageExportType,
+)
+from fintech_algorithmic_trading.storage import (
     ExportValidationError as StorageValidationError,
+)
+from fintech_algorithmic_trading.storage import (
     ExportValidationRule as StorageValidationRule,
+)
+from fintech_algorithmic_trading.storage import (
     ExportValidationSummary as StorageValidationSummary,
+)
+from fintech_algorithmic_trading.storage import (
     RawEquityCurveExport as StorageRawEquity,
+)
+from fintech_algorithmic_trading.storage import (
     RawPositionExport as StorageRawPosition,
+)
+from fintech_algorithmic_trading.storage import (
     RawTradeExport as StorageRawTrade,
 )
 

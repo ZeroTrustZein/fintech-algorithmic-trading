@@ -6,12 +6,16 @@ import csv
 import io
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fintech_algorithmic_trading.types import (
     CleanEquityRecord,
     CleanPositionRecord,
     CleanTradeRecord,
+    ExportType,
+    ExportValidationError,
+    ExportValidationRule,
+    ExportValidationSummary,
     RawEquityCurveExport,
     RawPositionExport,
     RawTradeExport,
@@ -262,3 +266,323 @@ class PostgreSQLExportPipeline:
             drawdown=float(rec.get("drawdown") or 0.0),
             drawdown_pct=float(rec.get("drawdown_pct") or 0.0),
         )
+
+    @classmethod
+    def process_trades(
+        cls,
+        records: List[Union[Dict[str, Any], RawTradeExport]],
+        deduplicate: bool = True,
+    ) -> Tuple[List[CleanTradeRecord], ExportValidationSummary]:
+        """Batch clean, validate, and deduplicate raw trade export records."""
+        clean_map: Dict[str, CleanTradeRecord] = {}
+        errors: List[ExportValidationError] = []
+        quarantined = 0
+        duplicates = 0
+
+        for r in records:
+            rec = cls._to_dict(r)
+            err_msgs = cls.validate_trade_record(rec)
+            trade_id_raw = rec.get("trade_id")
+            rec_id = str(trade_id_raw).strip() if trade_id_raw else "UNKNOWN_ID"
+
+            if err_msgs:
+                quarantined += 1
+                for msg in err_msgs:
+                    rule = msg.split(":")[0].strip() if ":" in msg else ExportValidationRule.GENERIC_INVALID.value
+                    errors.append(
+                        ExportValidationError(
+                            export_type=ExportType.TRADES,
+                            record_identifier=rec_id,
+                            rule_name=rule,
+                            error_message=msg,
+                            raw_payload=rec,
+                        )
+                    )
+            else:
+                trade_id = str(rec["trade_id"]).strip()
+                if trade_id in clean_map:
+                    duplicates += 1
+                    errors.append(
+                        ExportValidationError(
+                            export_type=ExportType.TRADES,
+                            record_identifier=trade_id,
+                            rule_name=ExportValidationRule.DUPLICATE_TRADE_ID.value,
+                            error_message=f"DUPLICATE_TRADE_ID: trade_id '{trade_id}' already exists in batch; UPSERT applied",
+                            raw_payload=rec,
+                        )
+                    )
+                    if deduplicate:
+                        clean_map[trade_id] = cls.clean_trade(rec)
+                else:
+                    clean_map[trade_id] = cls.clean_trade(rec)
+
+        summary = ExportValidationSummary(
+            export_type=ExportType.TRADES,
+            total_raw_records=len(records),
+            valid_clean_records=len(clean_map),
+            quarantined_records=quarantined,
+            duplicate_records=duplicates,
+            errors=errors,
+        )
+        return list(clean_map.values()), summary
+
+    @classmethod
+    def process_positions(
+        cls,
+        records: List[Union[Dict[str, Any], RawPositionExport]],
+        deduplicate: bool = True,
+    ) -> Tuple[List[CleanPositionRecord], ExportValidationSummary]:
+        """Batch clean, validate, and deduplicate raw position export records."""
+        clean_map: Dict[Tuple[str, str, str], CleanPositionRecord] = {}
+        errors: List[ExportValidationError] = []
+        quarantined = 0
+        duplicates = 0
+
+        for r in records:
+            rec = cls._to_dict(r)
+            err_msgs = cls.validate_position_record(rec)
+            p_id = rec.get("portfolio_id") or "UNKNOWN_PORTFOLIO"
+            sym = rec.get("symbol") or "UNKNOWN_SYM"
+            side = rec.get("side") or "UNKNOWN_SIDE"
+            rec_id = f"{p_id}:{sym}:{side}"
+
+            if err_msgs:
+                quarantined += 1
+                for msg in err_msgs:
+                    rule = msg.split(":")[0].strip() if ":" in msg else ExportValidationRule.GENERIC_INVALID.value
+                    errors.append(
+                        ExportValidationError(
+                            export_type=ExportType.POSITIONS,
+                            record_identifier=rec_id,
+                            rule_name=rule,
+                            error_message=msg,
+                            raw_payload=rec,
+                        )
+                    )
+            else:
+                key = (
+                    str(rec["portfolio_id"]).strip(),
+                    str(rec["symbol"]).upper().strip(),
+                    str(rec["side"]).upper().strip(),
+                )
+                if key in clean_map:
+                    duplicates += 1
+                    errors.append(
+                        ExportValidationError(
+                            export_type=ExportType.POSITIONS,
+                            record_identifier=rec_id,
+                            rule_name="DUPLICATE_POSITION_KEY",
+                            error_message=f"DUPLICATE_POSITION: Key {key} already exists in batch; UPSERT applied",
+                            raw_payload=rec,
+                        )
+                    )
+                    if deduplicate:
+                        clean_map[key] = cls.clean_position(rec)
+                else:
+                    clean_map[key] = cls.clean_position(rec)
+
+        summary = ExportValidationSummary(
+            export_type=ExportType.POSITIONS,
+            total_raw_records=len(records),
+            valid_clean_records=len(clean_map),
+            quarantined_records=quarantined,
+            duplicate_records=duplicates,
+            errors=errors,
+        )
+        return list(clean_map.values()), summary
+
+    @classmethod
+    def process_equity_curve(
+        cls,
+        records: List[Union[Dict[str, Any], RawEquityCurveExport]],
+        deduplicate: bool = True,
+    ) -> Tuple[List[CleanEquityRecord], ExportValidationSummary]:
+        """Batch clean, validate, and deduplicate raw equity curve export records."""
+        clean_map: Dict[Tuple[str, str], CleanEquityRecord] = {}
+        errors: List[ExportValidationError] = []
+        quarantined = 0
+        duplicates = 0
+
+        for r in records:
+            rec = cls._to_dict(r)
+            err_msgs = cls.validate_equity_record(rec)
+            p_id = rec.get("portfolio_id") or "UNKNOWN_PORTFOLIO"
+            ts_str = str(rec.get("timestamp") or "UNKNOWN_TS")
+            rec_id = f"{p_id}:{ts_str}"
+
+            if err_msgs:
+                quarantined += 1
+                for msg in err_msgs:
+                    rule = msg.split(":")[0].strip() if ":" in msg else ExportValidationRule.GENERIC_INVALID.value
+                    errors.append(
+                        ExportValidationError(
+                            export_type=ExportType.EQUITY_CURVE,
+                            record_identifier=rec_id,
+                            rule_name=rule,
+                            error_message=msg,
+                            raw_payload=rec,
+                        )
+                    )
+            else:
+                clean_rec = cls.clean_equity(rec)
+                key = (clean_rec.portfolio_id, clean_rec.timestamp.isoformat())
+                if key in clean_map:
+                    duplicates += 1
+                    errors.append(
+                        ExportValidationError(
+                            export_type=ExportType.EQUITY_CURVE,
+                            record_identifier=rec_id,
+                            rule_name="DUPLICATE_EQUITY_SNAPSHOT",
+                            error_message=f"DUPLICATE_EQUITY: Snapshot {key} already exists; UPSERT applied",
+                            raw_payload=rec,
+                        )
+                    )
+                    if deduplicate:
+                        clean_map[key] = clean_rec
+                else:
+                    clean_map[key] = clean_rec
+
+        summary = ExportValidationSummary(
+            export_type=ExportType.EQUITY_CURVE,
+            total_raw_records=len(records),
+            valid_clean_records=len(clean_map),
+            quarantined_records=quarantined,
+            duplicate_records=duplicates,
+            errors=errors,
+        )
+        return list(clean_map.values()), summary
+
+    @classmethod
+    def process_export(
+        cls,
+        export_type: Union[ExportType, str],
+        records: List[Union[Dict[str, Any], Any]],
+        deduplicate: bool = True,
+    ) -> Tuple[List[Any], ExportValidationSummary]:
+        """Unified dispatch for batch cleaning and validation by export type."""
+        exp_type = ExportType(export_type)
+        if exp_type == ExportType.TRADES:
+            return cls.process_trades(records, deduplicate=deduplicate)
+        elif exp_type == ExportType.POSITIONS:
+            return cls.process_positions(records, deduplicate=deduplicate)
+        elif exp_type == ExportType.EQUITY_CURVE:
+            return cls.process_equity_curve(records, deduplicate=deduplicate)
+        raise ValueError(f"Unsupported export type: {export_type}")
+
+    @classmethod
+    def process_csv(
+        cls,
+        csv_content: str,
+        export_type: Union[ExportType, str],
+        default_portfolio_id: Optional[str] = None,
+        deduplicate: bool = True,
+    ) -> Tuple[List[Any], ExportValidationSummary]:
+        """Ingest raw CSV string export, parse rows, and run through the cleaning pipeline."""
+        reader = csv.DictReader(io.StringIO(csv_content.strip()))
+        rows: List[Dict[str, Any]] = []
+        for row in reader:
+            parsed = dict(row)
+            if default_portfolio_id and "portfolio_id" not in parsed:
+                parsed["portfolio_id"] = default_portfolio_id
+            rows.append(parsed)
+        return cls.process_export(export_type, rows, deduplicate=deduplicate)
+
+    @staticmethod
+    def _sql_escape(val: Any) -> str:
+        """Safely format values for PostgreSQL SQL literal insertion."""
+        if val is None:
+            return "NULL"
+        if isinstance(val, (int, float)):
+            return str(val)
+        if isinstance(val, datetime):
+            return f"'{val.isoformat()}'"
+        clean_str = str(val).replace("'", "''")
+        return f"'{clean_str}'"
+
+    @classmethod
+    def generate_staging_insert_sql(
+        cls, export_type: Union[ExportType, str], records: List[Dict[str, Any]]
+    ) -> str:
+        """Generate PostgreSQL bulk INSERT statement into staging table."""
+        if not records:
+            return ""
+        exp_type = ExportType(export_type)
+        table_map = {
+            ExportType.TRADES: (
+                "raw_trades_export",
+                [
+                    "trade_id", "symbol", "side", "quantity", "entry_price",
+                    "exit_price", "entry_time", "exit_time", "pnl",
+                    "return_pct", "commission", "holding_period_bars"
+                ],
+            ),
+            ExportType.POSITIONS: (
+                "raw_positions_export",
+                [
+                    "portfolio_id", "symbol", "name", "asset_class", "sector",
+                    "side", "quantity", "entry_price", "current_price",
+                    "market_value", "unrealized_pnl", "unrealized_pnl_pct"
+                ],
+            ),
+            ExportType.EQUITY_CURVE: (
+                "raw_equity_curve_export",
+                [
+                    "portfolio_id", "timestamp", "portfolio_value",
+                    "cash", "drawdown", "drawdown_pct"
+                ],
+            ),
+        }
+        table_name, cols = table_map[exp_type]
+        value_rows = []
+        for r in records:
+            vals = [cls._sql_escape(r.get(c)) for c in cols]
+            value_rows.append(f"    ({', '.join(vals)})")
+
+        return (
+            f"INSERT INTO {table_name} ({', '.join(cols)})\n"
+            f"VALUES\n" + ",\n".join(value_rows) + ";"
+        )
+
+    @classmethod
+    def execute_db_pipeline(
+        cls,
+        connection: Any,
+        export_type: Union[ExportType, str],
+        records: List[Dict[str, Any]],
+        init_schema: bool = True,
+    ) -> ExportValidationSummary:
+        """Execute PostgreSQL staging, cleaning, and error audit via database connection."""
+        cursor = connection.cursor()
+        try:
+            if init_schema:
+                cursor.execute(cls.get_schema_ddl())
+            insert_sql = cls.generate_staging_insert_sql(export_type, records)
+            if insert_sql:
+                cursor.execute(insert_sql)
+            cursor.execute(cls.get_clean_validate_sql())
+
+            cursor.execute(
+                "SELECT export_type, record_identifier, rule_name, error_message "
+                "FROM export_validation_errors WHERE export_type = %s",
+                (ExportType(export_type).value,),
+            )
+            rows = cursor.fetchall()
+            db_errors = [
+                ExportValidationError(
+                    export_type=ExportType(row[0]),
+                    record_identifier=row[1] or "",
+                    rule_name=row[2],
+                    error_message=row[3],
+                )
+                for row in rows
+            ]
+            return ExportValidationSummary(
+                export_type=ExportType(export_type),
+                total_raw_records=len(records),
+                valid_clean_records=len(records) - len(db_errors),
+                quarantined_records=len(db_errors),
+                duplicate_records=sum(1 for e in db_errors if "DUPLICATE" in e.rule_name),
+                errors=db_errors,
+            )
+        finally:
+            cursor.close()

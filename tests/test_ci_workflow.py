@@ -1,6 +1,7 @@
 """Unit and integration test suite for GitHub Actions CI workflow (Stage 8: CI Workflow)."""
 
 from pathlib import Path
+
 import yaml
 
 
@@ -18,7 +19,7 @@ def test_ci_workflow_valid_yaml():
 
     assert isinstance(data, dict)
     assert data.get("name") == "CI"
-    assert "on" in data
+    assert "on" in data or True in data
     assert "concurrency" in data
     assert "jobs" in data
 
@@ -29,7 +30,8 @@ def test_ci_workflow_triggers_and_concurrency():
     with open(ci_file, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    triggers = data["on"]
+    triggers = data.get("on") or data.get(True)
+    assert triggers is not None
     assert "push" in triggers
     assert "pull_request" in triggers
     assert "workflow_dispatch" in triggers

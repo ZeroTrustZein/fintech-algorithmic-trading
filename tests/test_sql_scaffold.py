@@ -67,7 +67,10 @@ def test_generate_copy_command():
     cmd = PostgreSQLExportPipeline.generate_copy_command(
         "raw_trades_export", "/var/data/trades_2026.csv"
     )
-    assert cmd == "COPY raw_trades_export FROM '/var/data/trades_2026.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');"
+    assert (
+        cmd
+        == "COPY raw_trades_export FROM '/var/data/trades_2026.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');"
+    )
 
     # Escaping single quotes in file paths
     cmd_escaped = PostgreSQLExportPipeline.generate_copy_command(

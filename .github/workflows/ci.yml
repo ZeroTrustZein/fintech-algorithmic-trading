@@ -1,6 +1,6 @@
 name: CI
 
-on:
+"on":
   push:
     branches:
       - main
@@ -62,7 +62,7 @@ jobs:
       - name: Run Mypy
         run: mypy src
 
-   test:
+  test:
     name: Test (${{ matrix.os }} - Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:

@@ -179,7 +179,7 @@ def test_process_trades_deduplication_upsert():
 
 def test_process_positions_clean_and_dirty_batch():
     """Verify position batch processing with validation, quarantine, and composite key UPSERT."""
-    raw_positions = [
+    raw_positions: list[Any] = [
         # Valid position
         {
             "portfolio_id": "PORT-ALPHA",
@@ -417,9 +417,7 @@ def test_execute_db_pipeline_adapter_mock():
         ("trades", "BAD-TRD", "POSITIVE_QUANTITY", "quantity must be strictly positive")
     ]
 
-    records = [
-        {"trade_id": "BAD-TRD", "symbol": "AAPL", "quantity": -10}
-    ]
+    records = [{"trade_id": "BAD-TRD", "symbol": "AAPL", "quantity": -10}]
 
     summary = PostgreSQLExportPipeline.execute_db_pipeline(
         mock_conn, ExportType.TRADES, records, init_schema=True

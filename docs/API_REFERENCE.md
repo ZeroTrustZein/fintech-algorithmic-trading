@@ -22,6 +22,7 @@ Comprehensive reference for public modules, classes, mathematical functions, and
 - [14. Risk Surveillance & Circuit Breakers (`surveillance.monitor`)](#14-risk-surveillance--circuit-breakers-surveillancemonitor)
 - [15. Reporting & Export (`reporting.tearsheet`)](#15-reporting--export-reportingtearsheet)
 - [16. Repository & Presets (`storage.repository`)](#16-repository--presets-storagerepository)
+- [17. PostgreSQL Storage & SQL Cleaning Pipeline (`storage.sql_pipeline`)](#17-postgresql-storage--sql-cleaning-pipeline-storagesql_pipeline)
 
 ---
 
@@ -78,6 +79,45 @@ Multi-asset institutional account container.
 - `positions: List[Position]` — List of open positions.
 - `base_currency: str = "USD"`.
 - **Computed Properties**: `net_asset_value`, `total_positions_value`, `gross_exposure`, `net_exposure`, `leverage`, `asset_weights`, `sector_weights`.
+
+### PostgreSQL Pipeline & Export Models
+
+#### `ExportType` (Enum)
+Supported export dataset classifications:
+- `TRADES = "trades"`
+- `POSITIONS = "positions"`
+- `EQUITY_CURVE = "equity_curve"`
+
+#### `ExportValidationRule` (Enum)
+Validation error rule identifiers:
+- `NOT_NULL_TRADE_ID`, `NOT_NULL_SYMBOL`, `INVALID_SIDE`, `POSITIVE_QUANTITY`, `POSITIVE_ENTRY_PRICE`, `POSITIVE_EXIT_PRICE`, `NOT_NULL_TIMESTAMPS`, `TEMPORAL_ORDER_VIOLATION`, `NON_NEGATIVE_COMMISSION`, `DUPLICATE_TRADE_ID`
+- `NOT_NULL_PORTFOLIO_ID`, `INVALID_POSITION_SIDE`, `POSITIVE_CURRENT_PRICE`, `NOT_NULL_MARKET_VALUE`, `NOT_NULL_TIMESTAMP`, `NON_NEGATIVE_PORTFOLIO_VALUE`, `NOT_NULL_CASH`, `NON_NEGATIVE_DRAWDOWN`, `INVALID_DRAWDOWN_PCT`, `GENERIC_INVALID`
+
+#### `ExportValidationError`
+Audit record of a rejected row:
+- `error_id: Optional[int]`
+- `export_type: ExportType`
+- `record_identifier: str`
+- `rule_name: str`
+- `error_message: str`
+- `raw_payload: Optional[Dict[str, Any]]`
+- `detected_at: datetime`
+
+#### `RawTradeExport`, `RawPositionExport`, `RawEquityCurveExport`
+Unconstrained staging models mapping directly to PostgreSQL raw tables.
+
+#### `CleanTradeRecord`, `CleanPositionRecord`, `CleanEquityRecord`
+Validated, strictly typed domain records verified against business constraints.
+
+#### `ExportValidationSummary`
+Validation run audit statistics:
+- `export_type: ExportType`
+- `total_raw_records: int`
+- `valid_clean_records: int`
+- `quarantined_records: int`
+- `duplicate_records: int`
+- `errors: List[ExportValidationError]`
+- `is_clean: bool` (computed property)
 
 ---
 
@@ -190,9 +230,15 @@ Package: `fintech_algorithmic_trading.engine.risk_engine`
 ```python
 class PortfolioRiskEngine:
     def __init__(self, limits: Optional[RiskLimits] = None): ...
-    def check_compliance(self, portfolio: Portfolio, custom_limits: Optional[RiskLimits] = None) -> RiskComplianceReport: ...
-    def run_stress_test(self, portfolio: Portfolio, scenario: StressScenario) -> StressTestResult: ...
-    def run_stress_suite(self, portfolio: Portfolio, scenarios: List[StressScenario]) -> List[StressTestResult]: ...
+    def check_compliance(
+        self, portfolio: Portfolio, custom_limits: Optional[RiskLimits] = None
+    ) -> RiskComplianceReport: ...
+    def run_stress_test(
+        self, portfolio: Portfolio, scenario: StressScenario
+    ) -> StressTestResult: ...
+    def run_stress_suite(
+        self, portfolio: Portfolio, scenarios: List[StressScenario]
+    ) -> List[StressTestResult]: ...
 ```
 
 - **Audited Limits (`RiskLimits`)**:
@@ -377,7 +423,9 @@ Package: `fintech_algorithmic_trading.backtest.engine`
 
 ```python
 class BacktestEngine:
-    def __init__(self, config: Optional[BacktestConfig] = None, oms: Optional[OrderManagementSystem] = None): ...
+    def __init__(
+        self, config: Optional[BacktestConfig] = None, oms: Optional[OrderManagementSystem] = None
+    ): ...
     def run(
         self,
         symbol: str,
@@ -414,7 +462,9 @@ class RiskSurveillanceMonitor:
     ): ...
     def register_alert_listener(self, listener: Callable[[RiskAlert], None]) -> None: ...
     def audit_portfolio(self, portfolio: Portfolio) -> SurveillanceReport: ...
-    def execute_emergency_kill_switch(self, portfolio: Portfolio, oms: OrderManagementSystem) -> List[ExecutionReport]: ...
+    def execute_emergency_kill_switch(
+        self, portfolio: Portfolio, oms: OrderManagementSystem
+    ) -> List[ExecutionReport]: ...
     def reset_circuit_breaker(self) -> None: ...
 ```
 
@@ -429,11 +479,17 @@ Package: `fintech_algorithmic_trading.reporting.tearsheet`
 - `generate_backtest_tearsheet(backtest_result: BacktestResult) -> str`
 
 ### Class: `DataExporter`
-- `export_portfolio_positions_json(portfolio: Portfolio) -> str`
+- `export_portfolio_json(portfolio: Portfolio) -> str`
 - `export_portfolio_positions_csv(portfolio: Portfolio) -> str`
 - `export_backtest_trades_csv(trades: List[BacktestTrade]) -> str`
-- `export_equity_curve_csv(equity_curve: List[float]) -> str`
+- `export_equity_curve_csv(result: Union[BacktestResult, List[float]]) -> str`
+- `export_stress_test_json(results: List[StressTestResult]) -> str`
 - `export_stress_test_csv(results: List[StressTestResult]) -> str`
+- `export_and_clean_trades(trades: List[BacktestTrade]) -> Tuple[ExportValidationSummary, List[CleanTradeRecord]]`
+- `export_and_clean_positions(portfolio: Portfolio) -> Tuple[ExportValidationSummary, List[CleanPositionRecord]]`
+- `export_and_clean_equity_curve(result: BacktestResult, portfolio_id: str = "backtest-account") -> Tuple[ExportValidationSummary, List[CleanEquityRecord]]`
+- `export_to_sql_staging(data: Any, export_type: ExportType, method: str = "insert") -> str`
+- `export_pipeline_staging_script(trades: Optional[List[BacktestTrade]] = None, portfolio: Optional[Portfolio] = None, backtest_result: Optional[BacktestResult] = None) -> str`
 
 ---
 
@@ -450,3 +506,83 @@ Package: `fintech_algorithmic_trading.storage.repository`
 - `get_stress_scenario(scenario_id: str) -> Optional[StressScenario]`
 - `generate_synthetic_bars(symbol: str, n_bars: int = 252, start_price: float = 100.0, annual_drift: float = 0.08, annual_vol: float = 0.20, seed: Optional[int] = 42) -> List[Bar]`
 - `generate_synthetic_returns(n_days: int = 750, mean_daily: float = 0.0003, vol_daily: float = 0.012, fat_tailed: bool = True, seed: Optional[int] = 42) -> np.ndarray`
+
+---
+
+## 17. PostgreSQL Storage & SQL Cleaning Pipeline (`storage.sql_pipeline`)
+
+Package: `fintech_algorithmic_trading.storage.sql_pipeline`
+
+### Class: `PostgreSQLExportPipeline`
+
+Production ETL/ELT pipeline for staging, cleaning, validating, and reconstructing trading exports using PostgreSQL and Pydantic.
+
+```python
+class PostgreSQLExportPipeline:
+    # 1. SQL DDL & Script Generators
+    @classmethod
+    def get_schema_ddl(cls) -> str: ...
+    @classmethod
+    def get_clean_validate_sql(cls) -> str: ...
+    @staticmethod
+    def generate_copy_command(table_name: str, csv_file_path: str) -> str: ...
+    @staticmethod
+    def generate_staging_insert_sql(export_type: ExportType, raw_records: Sequence[Any]) -> str: ...
+
+    # 2. Individual Record Validation & Cleaning
+    @classmethod
+    def validate_trade_record(cls, record: Union[Dict[str, Any], RawTradeExport]) -> List[str]: ...
+    @classmethod
+    def validate_position_record(cls, record: Union[Dict[str, Any], RawPositionExport]) -> List[str]: ...
+    @classmethod
+    def validate_equity_record(cls, record: Union[Dict[str, Any], RawEquityCurveExport]) -> List[str]: ...
+    @classmethod
+    def clean_trade(cls, record: Union[Dict[str, Any], RawTradeExport]) -> CleanTradeRecord: ...
+    @classmethod
+    def clean_position(cls, record: Union[Dict[str, Any], RawPositionExport]) -> CleanPositionRecord: ...
+    @classmethod
+    def clean_equity(cls, record: Union[Dict[str, Any], RawEquityCurveExport]) -> CleanEquityRecord: ...
+
+    # 3. Batch Processing & Deduplication
+    @classmethod
+    def process_trades(cls, raw_records: Sequence[Union[Dict[str, Any], RawTradeExport]]) -> Tuple[ExportValidationSummary, List[CleanTradeRecord]]: ...
+    @classmethod
+    def process_positions(cls, raw_records: Sequence[Union[Dict[str, Any], RawPositionExport]]) -> Tuple[ExportValidationSummary, List[CleanPositionRecord]]: ...
+    @classmethod
+    def process_equity_curve(cls, raw_records: Sequence[Union[Dict[str, Any], RawEquityCurveExport]]) -> Tuple[ExportValidationSummary, List[CleanEquityRecord]]: ...
+    @classmethod
+    def process_export(cls, export_type: ExportType, raw_records: Sequence[Any]) -> Tuple[ExportValidationSummary, List[Any]]: ...
+    @classmethod
+    def process_csv(cls, csv_content_or_path: str, export_type: ExportType) -> Tuple[ExportValidationSummary, List[Any]]: ...
+
+    # 4. Database Integration & Roundtrip Reconstruction
+    @classmethod
+    def execute_db_pipeline(
+        cls,
+        conn: Any,
+        raw_trades: Optional[Sequence[Any]] = None,
+        raw_positions: Optional[Sequence[Any]] = None,
+        raw_equity: Optional[Sequence[Any]] = None,
+        run_transformations: bool = True,
+    ) -> Dict[str, Any]: ...
+    @classmethod
+    def reconstruct_portfolio(
+        cls,
+        portfolio_id: str,
+        clean_positions: Sequence[CleanPositionRecord],
+        initial_cash: float = 0.0,
+    ) -> Portfolio: ...
+    @classmethod
+    def reconstruct_trades(
+        cls,
+        clean_trades: Sequence[CleanTradeRecord],
+    ) -> List[BacktestTrade]: ...
+```
+
+#### Method Highlights:
+- **`get_schema_ddl()`**: Returns complete DDL statements defining unconstrained staging tables (`raw_trades_export`, `raw_positions_export`, `raw_equity_curve_export`), validation error log (`export_validation_errors`), and typed clean tables with indexes (`clean_trades`, `clean_positions`, `clean_equity_curve`).
+- **`get_clean_validate_sql()`**: Returns idempotent SQL transformation script with window functions for deduplication, rule logging, and INSERT INTO clean tables.
+- **`generate_copy_command(table_name, csv_file_path)`**: Emits PostgreSQL `\copy` command for high-throughput bulk ingestion.
+- **`generate_staging_insert_sql(export_type, raw_records)`**: Generates sanitized multi-row SQL INSERT statements for staging tables.
+- **`process_export(export_type, raw_records)`**: Unified entry point for batch validation and deduplication, returning an `ExportValidationSummary` and list of clean typed models.
+- **`reconstruct_portfolio(...)` / `reconstruct_trades(...)`**: Converts validated database records back into native `Portfolio` and `BacktestTrade` domain instances.

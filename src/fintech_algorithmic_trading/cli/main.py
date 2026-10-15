@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from typing import Optional
 
@@ -16,8 +18,9 @@ from fintech_algorithmic_trading.engine.greeks import calculate_option_greeks
 from fintech_algorithmic_trading.engine.monte_carlo import MonteCarloEngine
 from fintech_algorithmic_trading.engine.risk_engine import PortfolioRiskEngine
 from fintech_algorithmic_trading.engine.var import VaRCalculator
-from fintech_algorithmic_trading.reporting import RiskReportGenerator
+from fintech_algorithmic_trading.reporting import DataExporter, RiskReportGenerator
 from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
 from fintech_algorithmic_trading.strategy import (
     AlphaStrategy,
     CompositeAlphaAggregator,
@@ -30,6 +33,7 @@ from fintech_algorithmic_trading.types import (
     BacktestConfig,
     CircuitBreakerState,
     DriftModel,
+    ExportType,
     MonteCarloConfig,
     OptionType,
     RiskLimits,
@@ -564,6 +568,343 @@ def report_cmd(portfolio: str, output: Optional[str]):
         console.print(f"[bold green]Tearsheet successfully saved to {output}[/bold green]")
     else:
         console.print(tearsheet)
+
+
+@cli.command("sql-schema")
+@click.option(
+    "--validate-script",
+    is_flag=True,
+    help="Display clean and validate SQL script instead of table DDL",
+)
+@click.option("--output", "-o", default=None, help="Save SQL output to file path")
+def sql_schema_cmd(validate_script: bool, output: Optional[str]):
+    """Display or export PostgreSQL schema DDL and validation scripts."""
+    sql = (
+        PostgreSQLExportPipeline.get_clean_validate_sql()
+        if validate_script
+        else PostgreSQLExportPipeline.get_schema_ddl()
+    )
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(sql)
+        console.print(f"[bold green]SQL successfully saved to {output}[/bold green]")
+    else:
+        console.print(sql)
+
+
+@cli.command("clean-export")
+@click.option(
+    "--type",
+    "-t",
+    "export_type",
+    type=click.Choice(["trades", "positions", "equity", "equity_curve"], case_sensitive=False),
+    default="trades",
+    help="Export type to clean and validate",
+)
+@click.option("--file", "-f", default=None, help="Path to raw CSV export file")
+@click.option("--portfolio", "-p", default=None, help="Portfolio preset ID (for positions export)")
+@click.option("--output", "-o", default=None, help="Save clean records to CSV or JSON file")
+@click.option("--json-out", is_flag=True, help="Output validation summary and records as JSON")
+def clean_export_cmd(
+    export_type: str,
+    file: Optional[str],
+    portfolio: Optional[str],
+    output: Optional[str],
+    json_out: bool,
+):
+    """Clean, deduplicate, and validate raw exports with PostgreSQL pipeline logic."""
+    exp_t = export_type.lower()
+    type_map = {
+        "trades": ExportType.TRADES,
+        "positions": ExportType.POSITIONS,
+        "equity": ExportType.EQUITY_CURVE,
+        "equity_curve": ExportType.EQUITY_CURVE,
+    }
+    exp_enum = type_map[exp_t]
+    default_port_id: Optional[str] = None
+
+    if file:
+        with open(file, "r", encoding="utf-8") as f:
+            csv_text = f.read()
+    elif exp_enum == ExportType.POSITIONS:
+        port_id = portfolio or "global-macro"
+        default_port_id = port_id
+        port = PortfolioRepository.get_portfolio(port_id)
+        if not port:
+            console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
+            raise click.Abort()
+        csv_text = DataExporter.export_portfolio_positions_csv(port)
+    elif exp_enum == ExportType.EQUITY_CURVE:
+        default_port_id = portfolio or "global-macro"
+        csv_text = (
+            "portfolio_id,timestamp,portfolio_value,cash,drawdown,drawdown_pct\n"
+            f"{default_port_id},2026-03-01T00:00:00,100000000.0,15000000.0,0.0,0.0\n"
+            f"{default_port_id},2026-03-02T00:00:00,100500000.0,14800000.0,0.0,0.0\n"
+            f"{default_port_id},2026-03-03T00:00:00,99800000.0,15200000.0,700000.0,0.007\n"
+        )
+    else:  # trades
+        csv_text = (
+            "trade_id,symbol,side,quantity,entry_price,exit_price,entry_time,exit_time,pnl,return_pct,commission,holding_period_bars\n"
+            "T-001,SPY,BUY,100,500.0,505.0,2026-03-01T09:30:00,2026-03-01T15:30:00,500.0,0.01,2.0,6\n"
+            "T-002,AAPL,BUY,50,180.0,175.0,2026-03-02T10:00:00,2026-03-02T14:00:00,-250.0,-0.0278,1.5,4\n"
+            "T-003,MSFT,BUY,200,400.0,408.0,2026-03-03T11:00:00,2026-03-03T16:00:00,1600.0,0.02,3.0,10\n"
+        )
+
+    clean_records, summary = PostgreSQLExportPipeline.process_csv(
+        csv_content=csv_text,
+        export_type=exp_enum,
+        default_portfolio_id=default_port_id,
+    )
+
+    if json_out:
+        out = {
+            "summary": summary.model_dump(),
+            "clean_records": [r.model_dump() for r in clean_records],
+        }
+        console.print(json.dumps(out, indent=2, default=str))
+        if output:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(json.dumps(out, indent=2, default=str))
+            console.print(f"[bold green]Output saved to {output}[/bold green]")
+        return
+
+    table = Table(
+        title=f"PostgreSQL Export Validation Summary: {exp_enum.value.upper()}",
+        show_header=False,
+    )
+    table.add_column("Metric", style="bold cyan")
+    table.add_column("Value", justify="right")
+    table.add_row("Total Raw Records", str(summary.total_raw_records))
+    table.add_row("Clean / Valid Records", f"[green]{summary.valid_clean_records}[/green]")
+    table.add_row("Duplicate Records Dropped", f"[yellow]{summary.duplicate_records}[/yellow]")
+    err_style = "red" if summary.quarantined_records > 0 else "dim"
+    table.add_row(
+        "Quarantined Error Records",
+        f"[{err_style}]{summary.quarantined_records}[/{err_style}]",
+    )
+    pass_rate = (
+        (summary.valid_clean_records / summary.total_raw_records * 100.0)
+        if summary.total_raw_records > 0
+        else 0.0
+    )
+    table.add_row("Validation Pass Rate", f"{pass_rate:.1f}%")
+    console.print(table)
+
+    if summary.errors:
+        err_table = Table(
+            title=f"Validation Errors Encountered ({len(summary.errors)} issues)",
+            show_header=True,
+            header_style="bold red",
+        )
+        err_table.add_column("Record", style="bold")
+        err_table.add_column("Rule")
+        err_table.add_column("Message")
+        for err in summary.errors[:15]:
+            err_table.add_row(
+                str(err.record_identifier or "N/A"),
+                str(err.rule_name),
+                err.error_message,
+            )
+        console.print(err_table)
+
+    if clean_records:
+        rec_table = Table(
+            title=f"Clean Validated Records Preview (First {min(len(clean_records), 10)} of {len(clean_records)})",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        if exp_t == "trades":
+            rec_table.add_column("Trade ID", style="bold")
+            rec_table.add_column("Symbol")
+            rec_table.add_column("Side")
+            rec_table.add_column("Qty", justify="right")
+            rec_table.add_column("Entry ($)", justify="right")
+            rec_table.add_column("Exit ($)", justify="right")
+            rec_table.add_column("PnL ($)", justify="right")
+            rec_table.add_column("Return (%)", justify="right")
+            for r in clean_records[:10]:
+                pnl_color = "green" if r.pnl >= 0 else "red"
+                rec_table.add_row(
+                    r.trade_id,
+                    r.symbol,
+                    r.side,
+                    f"{r.quantity:,.0f}",
+                    f"${r.entry_price:.2f}",
+                    f"${r.exit_price:.2f}",
+                    f"[{pnl_color}]${r.pnl:,.2f}[/{pnl_color}]",
+                    f"{r.return_pct * 100:.2f}%",
+                )
+        elif exp_t == "positions":
+            rec_table.add_column("Portfolio", style="bold")
+            rec_table.add_column("Symbol")
+            rec_table.add_column("Side")
+            rec_table.add_column("Qty", justify="right")
+            rec_table.add_column("Current ($)", justify="right")
+            rec_table.add_column("Market Value ($)", justify="right")
+            rec_table.add_column("Unrealized PnL ($)", justify="right")
+            for r in clean_records[:10]:
+                pnl_color = "green" if r.unrealized_pnl >= 0 else "red"
+                rec_table.add_row(
+                    r.portfolio_id,
+                    r.symbol,
+                    r.side,
+                    f"{r.quantity:,.0f}",
+                    f"${r.current_price:.2f}",
+                    f"${r.market_value:,.2f}",
+                    f"[{pnl_color}]${r.unrealized_pnl:,.2f}[/{pnl_color}]",
+                )
+        else:  # equity
+            rec_table.add_column("Portfolio", style="bold")
+            rec_table.add_column("Timestamp")
+            rec_table.add_column("NAV ($)", justify="right")
+            rec_table.add_column("Cash ($)", justify="right")
+            rec_table.add_column("Drawdown ($)", justify="right")
+            rec_table.add_column("Drawdown (%)", justify="right")
+            for r in clean_records[:10]:
+                rec_table.add_row(
+                    r.portfolio_id,
+                    str(r.timestamp),
+                    f"${r.portfolio_value:,.2f}",
+                    f"${r.cash:,.2f}",
+                    f"${r.drawdown:,.2f}",
+                    f"{r.drawdown_pct * 100:.2f}%",
+                )
+        console.print(rec_table)
+
+    if output:
+        if output.endswith(".json"):
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        [r.model_dump() for r in clean_records],
+                        indent=2,
+                        default=str,
+                    )
+                )
+        else:
+            with open(output, "w", encoding="utf-8", newline="") as f:
+                if clean_records:
+                    fieldnames = list(clean_records[0].model_dump().keys())
+                    dict_writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    dict_writer.writeheader()
+                    for rec in clean_records:
+                        dict_writer.writerow(rec.model_dump())
+        console.print(
+            f"[bold green]Saved {len(clean_records)} clean records to {output}[/bold green]"
+        )
+
+
+@cli.command("sql-generate")
+@click.option(
+    "--type",
+    "-t",
+    "export_type",
+    type=click.Choice(["trades", "positions", "equity", "equity_curve"], case_sensitive=False),
+    default="trades",
+    help="Export type for SQL generation",
+)
+@click.option("--file", "-f", default=None, help="Path to raw CSV export file")
+@click.option("--portfolio", "-p", default=None, help="Portfolio preset ID (for positions export)")
+@click.option(
+    "--copy-command",
+    is_flag=True,
+    help="Generate PostgreSQL COPY command instead of INSERTs",
+)
+@click.option("--output", "-o", default=None, help="Save SQL output to file path")
+def sql_generate_cmd(
+    export_type: str,
+    file: Optional[str],
+    portfolio: Optional[str],
+    copy_command: bool,
+    output: Optional[str],
+):
+    """Generate PostgreSQL staging COPY command or bulk INSERT SQL statements."""
+    exp_t = export_type.lower()
+    type_map = {
+        "trades": ExportType.TRADES,
+        "positions": ExportType.POSITIONS,
+        "equity": ExportType.EQUITY_CURVE,
+        "equity_curve": ExportType.EQUITY_CURVE,
+    }
+    exp_enum = type_map[exp_t]
+    table_name = {
+        ExportType.TRADES: "raw_trades_export",
+        ExportType.POSITIONS: "raw_positions_export",
+        ExportType.EQUITY_CURVE: "raw_equity_curve_export",
+    }[exp_enum]
+
+    if copy_command:
+        file_path = file or f"/data/exports/{exp_enum.value}.csv"
+        sql = PostgreSQLExportPipeline.generate_copy_command(table_name, file_path)
+    else:
+        if file:
+            with open(file, "r", encoding="utf-8") as f:
+                records = list(csv.DictReader(f))
+        elif exp_enum == ExportType.POSITIONS:
+            port_id = portfolio or "global-macro"
+            port = PortfolioRepository.get_portfolio(port_id)
+            if not port:
+                console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
+                raise click.Abort()
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(
+                [
+                    "portfolio_id",
+                    "symbol",
+                    "name",
+                    "asset_class",
+                    "sector",
+                    "side",
+                    "quantity",
+                    "entry_price",
+                    "current_price",
+                    "market_value",
+                    "unrealized_pnl",
+                    "unrealized_pnl_pct",
+                ]
+            )
+            for p in port.positions:
+                writer.writerow(
+                    [
+                        port.id,
+                        p.asset.symbol,
+                        p.asset.name,
+                        p.asset.asset_class.value,
+                        p.asset.sector or "",
+                        p.side.value,
+                        p.quantity,
+                        p.entry_price,
+                        p.current_price,
+                        p.market_value,
+                        round(p.unrealized_pnl, 2),
+                        round(p.unrealized_pnl_pct, 4),
+                    ]
+                )
+            records = list(csv.DictReader(io.StringIO(buf.getvalue())))
+        elif exp_enum == ExportType.EQUITY_CURVE:
+            csv_text = (
+                "portfolio_id,timestamp,portfolio_value,cash,drawdown,drawdown_pct\n"
+                "global-macro,2026-03-01T00:00:00,100000000.0,15000000.0,0.0,0.0\n"
+                "global-macro,2026-03-02T00:00:00,100500000.0,14800000.0,0.0,0.0\n"
+            )
+            records = list(csv.DictReader(io.StringIO(csv_text)))
+        else:  # trades
+            csv_text = (
+                "trade_id,symbol,side,quantity,entry_price,exit_price,entry_time,exit_time,pnl,return_pct,commission,holding_period_bars\n"
+                "T-001,SPY,BUY,100,500.0,505.0,2026-03-01T09:30:00,2026-03-01T15:30:00,500.0,0.01,2.0,6\n"
+                "T-002,AAPL,BUY,50,180.0,175.0,2026-03-02T10:00:00,2026-03-02T14:00:00,-250.0,-0.0278,1.5,4\n"
+            )
+            records = list(csv.DictReader(io.StringIO(csv_text)))
+
+        sql = PostgreSQLExportPipeline.generate_staging_insert_sql(exp_enum, records)
+
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(sql)
+        console.print(f"[bold green]SQL written to {output}[/bold green]")
+    else:
+        console.print(sql)
 
 
 if __name__ == "__main__":

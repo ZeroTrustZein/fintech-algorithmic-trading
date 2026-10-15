@@ -5,14 +5,20 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fintech_algorithmic_trading.types import (
     BacktestResult,
     BacktestTrade,
+    CleanEquityRecord,
+    CleanPositionRecord,
+    CleanTradeRecord,
+    ExportType,
+    ExportValidationSummary,
     MonteCarloResult,
     Portfolio,
+    Position,
     RiskComplianceReport,
     StressTestResult,
     VaRMethod,
@@ -298,3 +304,192 @@ class DataExporter:
                 ]
             )
         return output.getvalue()
+
+    @staticmethod
+    def _trade_to_raw_dict(t: BacktestTrade) -> Dict[str, Any]:
+        """Convert BacktestTrade domain model to raw export dict."""
+        return {
+            "trade_id": t.trade_id,
+            "symbol": t.symbol,
+            "side": t.side.value if hasattr(t.side, "value") else str(t.side),
+            "quantity": t.quantity,
+            "entry_price": t.entry_price,
+            "exit_price": t.exit_price,
+            "entry_time": (
+                t.entry_time.isoformat()
+                if hasattr(t.entry_time, "isoformat")
+                else str(t.entry_time)
+            ),
+            "exit_time": (
+                t.exit_time.isoformat() if hasattr(t.exit_time, "isoformat") else str(t.exit_time)
+            ),
+            "pnl": t.pnl,
+            "return_pct": t.return_pct,
+            "commission": t.commission,
+            "holding_period_bars": t.holding_period_bars,
+        }
+
+    @staticmethod
+    def _position_to_raw_dict(p: Position, portfolio_id: str) -> Dict[str, Any]:
+        """Convert Position domain model to raw export dict."""
+        return {
+            "portfolio_id": portfolio_id,
+            "symbol": p.asset.symbol,
+            "name": p.asset.name,
+            "asset_class": (
+                p.asset.asset_class.value
+                if hasattr(p.asset.asset_class, "value")
+                else str(p.asset.asset_class)
+            ),
+            "sector": p.asset.sector or "",
+            "side": p.side.value if hasattr(p.side, "value") else str(p.side),
+            "quantity": p.quantity,
+            "entry_price": p.entry_price,
+            "current_price": p.current_price,
+            "market_value": p.market_value,
+            "unrealized_pnl": p.unrealized_pnl,
+            "unrealized_pnl_pct": p.unrealized_pnl_pct,
+        }
+
+    @staticmethod
+    def _build_raw_equity_records(
+        equity_curve: List[float],
+        initial_capital: float,
+        portfolio_id: str,
+        start_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Construct raw equity curve export rows with drawdown tracking."""
+        raw_records: List[Dict[str, Any]] = []
+        t = start_time or datetime(2026, 1, 1, 9, 30)
+        peak = initial_capital
+        for i, val in enumerate(equity_curve):
+            peak = max(peak, val)
+            dd = peak - val
+            dd_pct = dd / peak if peak > 0 else 0.0
+            raw_records.append(
+                {
+                    "curve_id": i + 1,
+                    "portfolio_id": portfolio_id,
+                    "timestamp": t + timedelta(days=i),
+                    "portfolio_value": val,
+                    "cash": val,
+                    "drawdown": dd,
+                    "drawdown_pct": dd_pct,
+                }
+            )
+        return raw_records
+
+    @classmethod
+    def export_and_clean_trades(
+        cls, trades: List[BacktestTrade], deduplicate: bool = True
+    ) -> Tuple[List[CleanTradeRecord], ExportValidationSummary]:
+        """Export domain backtest trades and run through PostgreSQL cleaning and validation."""
+        from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+
+        raw_trades = [cls._trade_to_raw_dict(t) for t in trades]
+        return PostgreSQLExportPipeline.process_trades(raw_trades, deduplicate=deduplicate)
+
+    @classmethod
+    def export_and_clean_positions(
+        cls, portfolio: Portfolio, deduplicate: bool = True
+    ) -> Tuple[List[CleanPositionRecord], ExportValidationSummary]:
+        """Export domain portfolio positions and run through PostgreSQL cleaning and validation."""
+        from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+
+        raw_positions = [cls._position_to_raw_dict(p, portfolio.id) for p in portfolio.positions]
+        return PostgreSQLExportPipeline.process_positions(raw_positions, deduplicate=deduplicate)
+
+    @classmethod
+    def export_and_clean_equity_curve(
+        cls,
+        result: BacktestResult,
+        portfolio_id: str = "BACKTEST-PORTFOLIO",
+        start_time: Optional[datetime] = None,
+    ) -> Tuple[List[CleanEquityRecord], ExportValidationSummary]:
+        """Export backtest equity curve and run through PostgreSQL cleaning and validation."""
+        from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+
+        raw_records = cls._build_raw_equity_records(
+            equity_curve=result.equity_curve,
+            initial_capital=result.initial_capital,
+            portfolio_id=portfolio_id,
+            start_time=start_time,
+        )
+        return PostgreSQLExportPipeline.process_equity_curve(raw_records)
+
+    @classmethod
+    def export_to_sql_staging(
+        cls,
+        export_type: Union[ExportType, str],
+        data: Union[Portfolio, List[BacktestTrade], BacktestResult, List[Dict[str, Any]]],
+        portfolio_id: Optional[str] = None,
+    ) -> str:
+        """Convert domain models or raw records into PostgreSQL bulk INSERT staging statement."""
+        from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+
+        exp_type = ExportType(export_type)
+        if isinstance(data, list) and (not data or isinstance(data[0], dict)):
+            return PostgreSQLExportPipeline.generate_staging_insert_sql(exp_type, data)  # type: ignore[arg-type]
+
+        if exp_type == ExportType.POSITIONS and isinstance(data, Portfolio):
+            pid = portfolio_id or data.id
+            raw_pos = [cls._position_to_raw_dict(p, pid) for p in data.positions]
+            return PostgreSQLExportPipeline.generate_staging_insert_sql(exp_type, raw_pos)
+
+        if exp_type == ExportType.TRADES:
+            trade_list: List[BacktestTrade] = (
+                data.trades
+                if isinstance(data, BacktestResult)
+                else (data if isinstance(data, list) else [])  # type: ignore[assignment]
+            )
+            raw_tr = [cls._trade_to_raw_dict(t) for t in trade_list]
+            return PostgreSQLExportPipeline.generate_staging_insert_sql(exp_type, raw_tr)
+
+        if exp_type == ExportType.EQUITY_CURVE and isinstance(data, BacktestResult):
+            pid = portfolio_id or "BACKTEST-PORTFOLIO"
+            raw_eq = cls._build_raw_equity_records(
+                equity_curve=data.equity_curve,
+                initial_capital=data.initial_capital,
+                portfolio_id=pid,
+            )
+            return PostgreSQLExportPipeline.generate_staging_insert_sql(exp_type, raw_eq)
+
+        raise ValueError(f"Unsupported data type for export {exp_type}: {type(data)}")
+
+    @classmethod
+    def export_pipeline_staging_script(
+        cls,
+        portfolio: Optional[Portfolio] = None,
+        backtest_result: Optional[BacktestResult] = None,
+        portfolio_id: str = "PORTFOLIO-1",
+    ) -> str:
+        """Construct full SQL script containing DDL, staging inserts, and cleaning execution."""
+        from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+
+        sections = [
+            "-- ==========================================================================",
+            "-- STAGING BUNDLE: Generated by Subsystems DataExporter",
+            "-- ==========================================================================",
+            PostgreSQLExportPipeline.get_schema_ddl(),
+        ]
+        if portfolio is not None:
+            sql_pos = cls.export_to_sql_staging(
+                ExportType.POSITIONS, portfolio, portfolio_id=portfolio_id
+            )
+            if sql_pos:
+                sections.append(sql_pos)
+
+        if backtest_result is not None:
+            sql_tr = cls.export_to_sql_staging(
+                ExportType.TRADES, backtest_result, portfolio_id=portfolio_id
+            )
+            if sql_tr:
+                sections.append(sql_tr)
+            sql_eq = cls.export_to_sql_staging(
+                ExportType.EQUITY_CURVE, backtest_result, portfolio_id=portfolio_id
+            )
+            if sql_eq:
+                sections.append(sql_eq)
+
+        sections.append(PostgreSQLExportPipeline.get_clean_validate_sql())
+        return "\n\n".join(sections)

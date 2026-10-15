@@ -54,12 +54,21 @@ This document provides a comprehensive technical overview of the architecture, a
        └────────────┬────────────┘                          │
                     │                                       │
                     ▼                                       ▼
-       ┌────────────────────────────────────────────────────────┐
-       │               Institutional Reporting                  │
-       │  - Markdown Risk Tearsheets & Memos                    │
-       │  - JSON / CSV Performance & Equity Curve Exporters     │
-       │  - Rich Interactive Command-Line Interface (CLI)       │
-       └────────────────────────────────────────────────────────┘
+        ┌────────────────────────────────────────────────────────┐
+        │               Institutional Reporting                  │
+        │  - Markdown Risk Tearsheets & Memos                    │
+        │  - JSON / CSV Performance & Equity Curve Exporters     │
+        │  - Rich Interactive Command-Line Interface (CLI)       │
+        └───────────────────────────┬────────────────────────────┘
+                                    │ Raw Exports (CSV / JSON)
+                                    ▼
+        ┌────────────────────────────────────────────────────────┐
+        │       PostgreSQL Export Cleaning & Validation Pipeline │
+        │  - Unconstrained Staging: raw_trades/positions/equity  │
+        │  - SQL Rules Engine: clean_validate.sql transformations │
+        │  - Audit Quarantine: export_validation_errors logging  │
+        │  - Clean Production Tables: clean_trades/pos/equity    │
+        └────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -257,7 +266,7 @@ The risk surveillance engine implements a tri-state circuit breaker:
 
 | Module | Core Responsibility | Key Classes / Functions |
 | :--- | :--- | :--- |
-| `types.py` | Strict Pydantic domain models & enumerations | `Portfolio`, `Position`, `Asset`, `VaRResult`, `MonteCarloConfig`, `MonteCarloResult`, `StressScenario`, `RiskLimits` |
+| `types.py` | Strict Pydantic domain models & enumerations | `Portfolio`, `Position`, `Asset`, `VaRResult`, `MonteCarloConfig`, `MonteCarloResult`, `StressScenario`, `RiskLimits`, `RawTradeExport`, `CleanTradeRecord`, `ExportValidationError`, `ExportValidationSummary` |
 | `engine/var.py` | Historical, Parametric, & Cornish-Fisher VaR | `VaRCalculator`, `calculate_historical_var`, `calculate_parametric_var`, `calculate_cornish_fisher_var` |
 | `engine/evt.py` | Extreme Value Theory tail estimation | `EVTEngine`, `calculate_evt_var` |
 | `engine/monte_carlo.py`| Vectorized correlated stochastic simulation | `MonteCarloEngine` |
@@ -273,4 +282,85 @@ The risk surveillance engine implements a tri-state circuit breaker:
 | `surveillance/monitor.py` | Circuit breaker gating & emergency kill switch | `RiskSurveillanceMonitor` |
 | `reporting/tearsheet.py`| Markdown tearsheets & JSON/CSV exporters | `RiskReportGenerator`, `DataExporter` |
 | `storage/repository.py` | Institutional portfolio & stress scenario presets | `PortfolioRepository` |
-| `cli/main.py` | Rich interactive terminal interface | `cli` group with 10 production commands |
+| `storage/sql_pipeline.py` | PostgreSQL export cleaning, staging & validation | `PostgreSQLExportPipeline` |
+| `storage/sql/` | DDL schema & transformation SQL scripts | `schema.sql`, `clean_validate.sql` |
+| `cli/main.py` | Rich interactive terminal interface | `cli` group with 13 production commands |
+
+---
+
+## 5. PostgreSQL Raw Export Cleaning & Validation Architecture
+
+To ensure data integrity between high-frequency execution systems, historical backtest artifacts, and downstream institutional risk reporting, the platform incorporates a two-tier ELT (Extract-Load-Transform) relational pipeline powered by PostgreSQL and client-side Pydantic validation mirrors.
+
+```
+                     Raw System Artifacts (CSV / JSON Exports)
+                                        │
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Raw Ingest Staging Tier (PostgreSQL)                                      │
+│    - raw_trades_export       (unconstrained types: TEXT, NUMERIC, TIMESTAMPTZ)│
+│    - raw_positions_export    (unconstrained: raw portfolio snapshots)        │
+│    - raw_equity_curve_export (unconstrained: timestamps & values)           │
+│    Fast bulk COPY or multi-row INSERTs without constraint abort risks       │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼ clean_validate.sql
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Set-Based Transformation & Validation Engine                              │
+│    - Window Function Deduplication: ROW_NUMBER() OVER (...)                │
+│    - Temporal Precedence Assertions: exit_time >= entry_time                │
+│    - Numerical Domain Checks: quantity > 0, entry/exit > 0, commission >= 0 │
+│    - Side Normalization: UPPER(TRIM(side)) in ('LONG','SHORT','BUY','SELL') │
+└───────────────────────┬─────────────────────────────────────┬───────────────┘
+                        │ Invalid / Failing                   │ Valid Records
+                        ▼                                     ▼
+┌──────────────────────────────────────────────┐ ┌────────────────────────────┐
+│ Audit & Quarantine Quarantine Tier           │ │ 3. Clean Production Schema │
+│ Table: export_validation_errors              │ │ - clean_trades             │
+│ - error_id (BIGSERIAL PK)                    │ │ - clean_positions          │
+│ - export_type ('trades', 'positions', ...)   │ │ - clean_equity_curve       │
+│ - record_identifier (e.g., trade_id)         │ │ Strong types, NOT NULL,    │
+│ - rule_name (e.g., TEMPORAL_ORDER_VIOLATION) │ │ CHECK constraints, UNIQUE  │
+│ - error_message, raw_payload (JSONB)         │ │ indexes & B-tree lookup    │
+│ - detected_at (TIMESTAMPTZ)                  │ └────────────────────────────┘
+└──────────────────────────────────────────────┘
+```
+
+### 5.1 Relational Schema Design
+
+The schema (`storage/sql/schema.sql`) implements three distinct functional tiers:
+
+1. **Unconstrained Staging Tables**:
+   - `raw_trades_export`, `raw_positions_export`, `raw_equity_curve_export`.
+   - Columns map raw exports directly without strict constraints to prevent transaction aborts during bulk COPY operations.
+2. **Audit Quarantine Log**:
+   - `export_validation_errors`: Records every validation failure along with its `rule_name`, failure description, offending record identifier, and full JSON payload (`JSONB`).
+3. **Validated Production Tables**:
+   - `clean_trades`: Enforces primary key `trade_id`, foreign-key-ready `symbol`, `CHECK (quantity > 0)`, `CHECK (entry_price > 0)`, `CHECK (exit_price > 0)`, `CHECK (exit_time >= entry_time)`, and `CHECK (commission >= 0)`.
+   - `clean_positions`: Unique compound key on `(portfolio_id, symbol, side)`, enforcing positive quantity and prices.
+   - `clean_equity_curve`: Unique compound key on `(portfolio_id, timestamp)`, enforcing non-negative portfolio value and valid drawdown percentages ($0 \le \text{drawdown\_pct} \le 1.0$).
+
+### 5.2 SQL Transformation & Validation Mathematics
+
+The transformation logic in `storage/sql/clean_validate.sql` executes atomically:
+
+#### Window Function Deduplication
+To isolate and remove duplicate exports while retaining the most recent ingestion, window ranking partitions by natural keys:
+$$\text{rank} = \text{ROW\_NUMBER}() \text{ OVER} \left(\text{PARTITION BY } \text{trade\_id} \text{ ORDER BY } \text{raw\_id DESC}\right)$$
+Only records where $\text{rank} = 1$ are eligible for promotion to clean production tables. Duplicate records with $\text{rank} > 1$ are routed to `export_validation_errors` under the rule `DUPLICATE_TRADE_ID`.
+
+#### Temporal Precedence Assertions
+Trade causality dictates that position closing cannot precede position opening:
+$$\Delta t = \text{exit\_time} - \text{entry\_time} \ge 0$$
+Any record violating $\Delta t \ge 0$ is flagged with `TEMPORAL_ORDER_VIOLATION` and excluded from clean storage.
+
+#### Domain Value Bounds
+Each trading metric is verified against physical and economic bounds:
+$$\text{quantity} > 0, \quad P_{\text{entry}} > 0, \quad P_{\text{exit}} > 0, \quad \text{commission} \ge 0$$
+$$\text{portfolio\_value} \ge 0, \quad 0 \le \text{drawdown\_pct} \le 1.0$$
+
+### 5.3 Dual-Mode Execution Framework
+
+The platform supports two complementary operational modes:
+- **In-Database Execution**: Direct execution within PostgreSQL clusters via `psql` or database migration runners. Maximizes throughput for gigabyte-scale trade journals.
+- **Client-Side Python Pipeline (`PostgreSQLExportPipeline`)**: Mirrors PostgreSQL validation rules exactly in Python using Pydantic schemas. Enables local unit testing, CI/CD validation without requiring a live PostgreSQL instance, and programmatic domain object reconstruction (`reconstruct_portfolio`, `reconstruct_trades`).

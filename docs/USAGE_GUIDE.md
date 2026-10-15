@@ -150,6 +150,57 @@ fintech-algorithmic-trading report --portfolio global-macro --output tearsheet-g
 
 ---
 
+### 2.11 PostgreSQL Schema & Validation Script (`sql-schema`)
+Generate complete PostgreSQL schema DDL or transformation scripts for database initialization:
+```bash
+# Display staging, audit, and clean table DDL
+fintech-algorithmic-trading sql-schema
+
+# Export schema DDL to file
+fintech-algorithmic-trading sql-schema --output schema.sql
+
+# Display SQL data cleaning, validation, and quarantine transformation script
+fintech-algorithmic-trading sql-schema --validate-script
+
+# Export validation transformation script to file
+fintech-algorithmic-trading sql-schema --validate-script --output clean_validate.sql
+```
+
+---
+
+### 2.12 Raw Export Cleaning & Validation (`clean-export`)
+Clean, deduplicate, and validate raw trades, positions, or equity curve exports:
+```bash
+# Clean default synthetic trade journal
+fintech-algorithmic-trading clean-export --type trades
+
+# Clean raw trade export from CSV file
+fintech-algorithmic-trading clean-export --type trades --file raw_trades.csv
+
+# Clean portfolio positions and save clean records to CSV
+fintech-algorithmic-trading clean-export --type positions --portfolio tech-momentum --output clean_positions.csv
+
+# Clean equity curve and emit validation summary as JSON
+fintech-algorithmic-trading clean-export --type equity --file raw_equity.csv --json-out
+```
+
+---
+
+### 2.13 SQL Ingestion & COPY Generation (`sql-generate`)
+Generate high-throughput PostgreSQL staging ingestion commands:
+```bash
+# Generate bulk SQL INSERT statements for trades
+fintech-algorithmic-trading sql-generate --type trades --file raw_trades.csv
+
+# Generate high-performance PostgreSQL COPY command
+fintech-algorithmic-trading sql-generate --type trades --file /var/data/raw_trades.csv --copy-command
+
+# Generate positions staging INSERTs from portfolio preset
+fintech-algorithmic-trading sql-generate --type positions --portfolio global-macro --output stage_positions.sql
+```
+
+---
+
 ## 3. Python Workflows & Integration Examples
 
 ### 3.1 Multi-Method VaR & CVaR Computation
@@ -173,7 +224,9 @@ results = VaRCalculator.evaluate_all(
 )
 
 for method, res in results.items():
-    print(f"{method.value:20s}: VaR = ${res.var_amount:,.2f} ({res.var_pct*100:.2f}%), CVaR = ${res.cvar_amount:,.2f}")
+    print(
+        f"{method.value:20s}: VaR = ${res.var_amount:,.2f} ({res.var_pct * 100:.2f}%), CVaR = ${res.cvar_amount:,.2f}"
+    )
 ```
 
 ---
@@ -202,8 +255,10 @@ engine = MonteCarloEngine(config=config)
 result = engine.simulate_portfolio(portfolio)
 
 print(f"Mean Terminal Value: ${result.mean_terminal_value:,.2f}")
-print(f"95% Simulated VaR:   ${result.simulated_var_95_amount:,.2f} ({result.simulated_var_95_pct*100:.2f}%)")
-print(f"Expected Max DD:     {result.max_drawdown_mean_pct*100:.2f}%")
+print(
+    f"95% Simulated VaR:   ${result.simulated_var_95_amount:,.2f} ({result.simulated_var_95_pct * 100:.2f}%)"
+)
+print(f"Expected Max DD:     {result.max_drawdown_mean_pct * 100:.2f}%")
 ```
 
 ---
@@ -263,12 +318,14 @@ from fintech_algorithmic_trading.types import OptimizationObjective
 
 symbols = ["SPY", "QQQ", "TLT", "GLD"]
 expected_returns = np.array([0.10, 0.14, 0.04, 0.07])
-covariance_matrix = np.array([
-    [0.0256, 0.0280, -0.0050, 0.0020],
-    [0.0280, 0.0484, -0.0070, 0.0030],
-    [-0.0050, -0.0070, 0.0196, 0.0040],
-    [0.0020, 0.0030, 0.0040, 0.0225],
-])
+covariance_matrix = np.array(
+    [
+        [0.0256, 0.0280, -0.0050, 0.0020],
+        [0.0280, 0.0484, -0.0070, 0.0030],
+        [-0.0050, -0.0070, 0.0196, 0.0040],
+        [0.0020, 0.0030, 0.0040, 0.0225],
+    ]
+)
 
 optimizer = PortfolioOptimizer(risk_free_rate=0.045)
 
@@ -316,7 +373,100 @@ result = engine.run(symbol="SPY", bars=bars, strategy=strategy)
 
 print(f"Total Return:     {result.metrics.total_return_pct:.2f}%")
 print(f"Sharpe Ratio:     {result.metrics.sharpe_ratio:.2f}")
-print(f"Max Drawdown:     {result.metrics.max_drawdown_pct*100:.2f}%")
+print(f"Max Drawdown:     {result.metrics.max_drawdown_pct * 100:.2f}%")
 print(f"Total Trades:     {result.metrics.total_trades}")
-print(f"Win Rate:         {result.metrics.win_rate*100:.1f}%")
+print(f"Win Rate:         {result.metrics.win_rate * 100:.1f}%")
+```
+
+---
+
+### 3.6 Cleaning and Validating Backtest Trades with PostgreSQL Pipeline
+Run an event-driven backtest, export raw trades, and validate them through `PostgreSQLExportPipeline`:
+```python
+from fintech_algorithmic_trading.backtest import BacktestEngine
+from fintech_algorithmic_trading.strategy import TrendFollowingMACDStrategy
+from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.reporting.tearsheet import DataExporter
+from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+from fintech_algorithmic_trading.types import ExportType
+
+# 1. Execute backtest
+bars = PortfolioRepository.generate_synthetic_bars("QQQ", n_bars=350, start_price=400.0)
+engine = BacktestEngine()
+result = engine.run("QQQ", bars, TrendFollowingMACDStrategy())
+
+# 2. Export & Clean trades directly
+summary, clean_trades = DataExporter.export_and_clean_trades(result.trades)
+print(f"Total Raw Trades:  {summary.total_raw_records}")
+print(f"Valid Clean Trades:{summary.valid_clean_records}")
+print(f"Quarantined:       {summary.quarantined_records}")
+print(f"Duplicates:        {summary.duplicate_records}")
+
+# 3. Generate PostgreSQL Staging DDL & Ingest Commands
+insert_sql = PostgreSQLExportPipeline.generate_staging_insert_sql(
+    ExportType.TRADES, [t.model_dump() for t in clean_trades]
+)
+print(f"Generated {len(clean_trades)} row staging INSERT statement.")
+```
+
+---
+
+### 3.7 End-to-End PostgreSQL Ingestion & SQL Transformations
+Executing database schema migration, staging load, and transformation with SQL on PostgreSQL:
+```bash
+# 1. Initialize PostgreSQL schema
+psql -h localhost -U postgres -d trading_db -c "$(fintech-algorithmic-trading sql-schema)"
+
+# 2. Stage raw export via COPY command
+psql -h localhost -U postgres -d trading_db -c "\copy raw_trades_export (trade_id, symbol, side, quantity, entry_price, exit_price, entry_time, exit_time, pnl, return_pct, commission, holding_period_bars) FROM 'raw_trades.csv' WITH (FORMAT csv, HEADER true);"
+
+# 3. Execute SQL cleaning, window deduplication, and quarantine logic
+psql -h localhost -U postgres -d trading_db -c "$(fintech-algorithmic-trading sql-schema --validate-script)"
+
+# 4. Inspect quarantine errors
+psql -h localhost -U postgres -d trading_db -c "SELECT rule_name, COUNT(*) FROM export_validation_errors GROUP BY rule_name;"
+
+# 5. Query clean production trades
+psql -h localhost -U postgres -d trading_db -c "SELECT symbol, COUNT(*), SUM(pnl) FROM clean_trades GROUP BY symbol;"
+```
+
+---
+
+### 3.8 Domain Object Roundtrip Reconstruction
+Reconstruct native `Portfolio` or `List[BacktestTrade]` objects from validated database records:
+```python
+from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+from fintech_algorithmic_trading.types import ExportType
+
+raw_positions = [
+    {
+        "portfolio_id": "prod-desk-1",
+        "symbol": "NVDA",
+        "name": "NVIDIA Corp",
+        "asset_class": "EQUITY",
+        "sector": "Technology",
+        "side": "LONG",
+        "quantity": 500.0,
+        "entry_price": 120.0,
+        "current_price": 135.0,
+        "market_value": 67500.0,
+        "unrealized_pnl": 7500.0,
+        "unrealized_pnl_pct": 0.125,
+    }
+]
+
+# Clean positions
+summary, clean_positions = PostgreSQLExportPipeline.process_positions(raw_positions)
+
+# Reconstruct live domain Portfolio object
+portfolio = PostgreSQLExportPipeline.reconstruct_portfolio(
+    portfolio_id="prod-desk-1",
+    clean_positions=clean_positions,
+    initial_cash=50_000.0,
+)
+
+print(f"Reconstructed Portfolio: {portfolio.id}")
+print(f"Net Asset Value:        ${portfolio.net_asset_value:,.2f}")
+print(f"Leverage:                {portfolio.leverage:.2f}x")
+print(f"Positions Count:         {len(portfolio.positions)}")
 ```

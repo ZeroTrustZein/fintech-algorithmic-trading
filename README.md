@@ -64,6 +64,12 @@ Detailed technical guides and reference manuals are available in the [`docs/`](d
 - **Crisis Stress Testing & Institutional Reporting**:
   - Historical crisis scenarios (2008 Lehman shock, 2020 Covid liquidity freeze, 2022 Rates repricing, Tech Rout, Crypto Winter).
   - Publication-ready Markdown tearsheets and JSON/CSV export utilities.
+- **PostgreSQL Raw Export Cleaning & Validation Pipeline**:
+  - High-throughput two-tier ELT architecture: bulk unconstrained staging ingestion into PostgreSQL (`raw_trades_export`, `raw_positions_export`, `raw_equity_curve_export`).
+  - Automated SQL transformation and validation engine (`clean_validate.sql`) routing invalid records to `export_validation_errors` audit quarantine.
+  - Idempotent deduplication via window functions (`ROW_NUMBER() OVER (PARTITION BY ...)`), strict temporal precedence checks (`exit_time >= entry_time`), and domain constraints.
+  - Strongly typed, validated production tables (`clean_trades`, `clean_positions`, `clean_equity_curve`) with optimized B-tree indices.
+  - Dual-mode client/server execution: pure in-database PostgreSQL scripts and client-side Python Pydantic validation pipeline with roundtrip domain object reconstruction.
 
 ---
 
@@ -114,12 +120,21 @@ Detailed technical guides and reference manuals are available in the [`docs/`](d
        └────────────┬────────────┘                          │
                     │                                       │
                     ▼                                       ▼
-       ┌────────────────────────────────────────────────────────┐
-       │               Institutional Reporting                  │
-       │  - Markdown Risk Tearsheets & Memos                    │
-       │  - JSON / CSV Performance & Equity Curve Exporters     │
-       │  - Rich Interactive Command-Line Interface (CLI)       │
-       └────────────────────────────────────────────────────────┘
+        ┌────────────────────────────────────────────────────────┐
+        │               Institutional Reporting                  │
+        │  - Markdown Risk Tearsheets & Memos                    │
+        │  - JSON / CSV Performance & Equity Curve Exporters     │
+        │  - Rich Interactive Command-Line Interface (CLI)       │
+        └───────────────────────────┬────────────────────────────┘
+                                    │ Raw Exports (CSV / JSON)
+                                    ▼
+        ┌────────────────────────────────────────────────────────┐
+        │       PostgreSQL Export Cleaning & Validation Pipeline │
+        │  - Unconstrained Staging: raw_trades/positions/equity  │
+        │  - SQL Rules Engine: clean_validate.sql transformations │
+        │  - Audit Quarantine: export_validation_errors logging  │
+        │  - Clean Production Tables: clean_trades/pos/equity    │
+        └────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -157,7 +172,11 @@ fintech-algorithmic-trading/
 │       ├── reporting/          # Tearsheet generator & CSV/JSON export
 │       │   └── tearsheet.py
 │       ├── storage/            # Portfolio profiles & market data loaders
-│       │   └── repository.py
+│       │   ├── repository.py   # Benchmark presets & synthetic feeds
+│       │   ├── sql_pipeline.py # PostgreSQL export cleaning & validation pipeline
+│       │   └── sql/            # Production DDL and validation scripts
+│       │       ├── schema.sql  # Staging, audit, and clean table definitions
+│       │       └── clean_validate.sql # SQL validation and deduplication transformations
 │       └── cli/                # Command-line interface with Rich
 │           └── main.py
 ├── tests/
@@ -203,6 +222,9 @@ pip install -e ".[dev]"
 | `surveillance` | Real-time circuit breaker & drawdown surveillance | `fintech-algorithmic-trading surveillance -p tech-momentum` |
 | `orderbook` | Inspect Level 2 order book market depth | `fintech-algorithmic-trading orderbook -s NVDA --levels 5` |
 | `report` | Generate institutional Markdown tearsheet | `fintech-algorithmic-trading report -p crypto-fx-alpha` |
+| `sql-schema` | Export PostgreSQL schema DDL or cleaning SQL script | `fintech-algorithmic-trading sql-schema -o schema.sql` |
+| `clean-export` | Clean and validate raw trades/positions/equity exports | `fintech-algorithmic-trading clean-export -t trades -f raw_trades.csv` |
+| `sql-generate` | Generate PostgreSQL staging COPY command or bulk INSERT SQL | `fintech-algorithmic-trading sql-generate -t trades -f raw_trades.csv --copy-command` |
 
 ---
 
@@ -225,7 +247,7 @@ var_results = VaRCalculator.evaluate_all(
     confidence_level=0.95,
 )
 for method, result in var_results.items():
-    print(f"{method.value}: VaR = ${result.var_amount:,.2f} ({result.var_pct*100:.2f}%)")
+    print(f"{method.value}: VaR = ${result.var_amount:,.2f} ({result.var_pct * 100:.2f}%)")
 
 # 3. Correlated Monte Carlo Path Simulation
 mc_engine = MonteCarloEngine()
@@ -237,6 +259,19 @@ print(f"P95 Terminal Value:  ${mc_result.p95_terminal_value:,.2f}")
 risk_engine = PortfolioRiskEngine()
 compliance = risk_engine.check_compliance(portfolio)
 print(f"Compliance Passed: {compliance.passed} (Violations: {len(compliance.violations)})")
+
+# 5. Clean & Validate Raw Trading Exports with PostgreSQL Pipeline
+from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
+from fintech_algorithmic_trading.types import ExportType
+
+raw_trades = [
+    {"trade_id": "T-101", "symbol": "AAPL", "side": "BUY", "quantity": 100, "entry_price": 180.0, "exit_price": 185.0, "entry_time": "2026-01-02T10:00:00Z", "exit_time": "2026-01-02T15:00:00Z"},
+    {"trade_id": "T-102", "symbol": "", "side": "INVALID", "quantity": -50, "entry_price": 0.0, "exit_price": -10.0, "entry_time": "2026-01-03T10:00:00Z", "exit_time": "2026-01-02T10:00:00Z"},  # Invalid
+]
+summary, clean_records = PostgreSQLExportPipeline.process_export(ExportType.TRADES, raw_trades)
+print(f"Valid: {summary.valid_clean_records}, Quarantined: {summary.quarantined_records}")
+for err in summary.errors:
+    print(f"Rule: {err.rule_name} -> {err.error_message}")
 ```
 
 ---

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -711,3 +711,188 @@ class SurveillanceReport(BaseModel):
     leverage: float
     kill_switch_active: bool
     remedial_instructions: List[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# PostgreSQL Raw Export Cleaning & Validation Pipeline Models (Stage 2: Types)
+# ============================================================================
+
+
+class ExportType(str, Enum):
+    """Supported export dataset types for PostgreSQL staging and cleaning."""
+
+    TRADES = "trades"
+    POSITIONS = "positions"
+    EQUITY_CURVE = "equity_curve"
+
+
+class ExportValidationRule(str, Enum):
+    """PostgreSQL export data cleaning and validation error rule identifiers."""
+
+    NOT_NULL_TRADE_ID = "NOT_NULL_TRADE_ID"
+    NOT_NULL_SYMBOL = "NOT_NULL_SYMBOL"
+    INVALID_SIDE = "INVALID_SIDE"
+    POSITIVE_QUANTITY = "POSITIVE_QUANTITY"
+    POSITIVE_ENTRY_PRICE = "POSITIVE_ENTRY_PRICE"
+    POSITIVE_EXIT_PRICE = "POSITIVE_EXIT_PRICE"
+    NOT_NULL_TIMESTAMPS = "NOT_NULL_TIMESTAMPS"
+    TEMPORAL_ORDER_VIOLATION = "TEMPORAL_ORDER_VIOLATION"
+    NON_NEGATIVE_COMMISSION = "NON_NEGATIVE_COMMISSION"
+    DUPLICATE_TRADE_ID = "DUPLICATE_TRADE_ID"
+    NOT_NULL_PORTFOLIO_ID = "NOT_NULL_PORTFOLIO_ID"
+    INVALID_POSITION_SIDE = "INVALID_POSITION_SIDE"
+    POSITIVE_CURRENT_PRICE = "POSITIVE_CURRENT_PRICE"
+    NOT_NULL_MARKET_VALUE = "NOT_NULL_MARKET_VALUE"
+    NOT_NULL_TIMESTAMP = "NOT_NULL_TIMESTAMP"
+    NON_NEGATIVE_PORTFOLIO_VALUE = "NON_NEGATIVE_PORTFOLIO_VALUE"
+    NOT_NULL_CASH = "NOT_NULL_CASH"
+    NON_NEGATIVE_DRAWDOWN = "NON_NEGATIVE_DRAWDOWN"
+    INVALID_DRAWDOWN_PCT = "INVALID_DRAWDOWN_PCT"
+    GENERIC_INVALID = "GENERIC_INVALID"
+
+
+class ExportValidationError(BaseModel):
+    """Record of a failed data quality or constraint check in the export pipeline."""
+
+    error_id: Optional[int] = None
+    export_type: ExportType
+    record_identifier: str
+    rule_name: str
+    error_message: str
+    raw_payload: Optional[Dict[str, Any]] = None
+    detected_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RawTradeExport(BaseModel):
+    """Unvalidated raw trade export staging row."""
+
+    raw_id: Optional[int] = None
+    trade_id: Optional[str] = None
+    symbol: Optional[str] = None
+    side: Optional[str] = None
+    quantity: Optional[float] = None
+    entry_price: Optional[float] = None
+    exit_price: Optional[float] = None
+    entry_time: Optional[datetime] = None
+    exit_time: Optional[datetime] = None
+    pnl: Optional[float] = None
+    return_pct: Optional[float] = None
+    commission: Optional[float] = None
+    holding_period_bars: Optional[int] = None
+    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RawPositionExport(BaseModel):
+    """Unvalidated raw portfolio position export staging row."""
+
+    raw_id: Optional[int] = None
+    portfolio_id: Optional[str] = None
+    symbol: Optional[str] = None
+    name: Optional[str] = None
+    asset_class: Optional[str] = None
+    sector: Optional[str] = None
+    side: Optional[str] = None
+    quantity: Optional[float] = None
+    entry_price: Optional[float] = None
+    current_price: Optional[float] = None
+    market_value: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RawEquityCurveExport(BaseModel):
+    """Unvalidated raw equity curve export staging row."""
+
+    raw_id: Optional[int] = None
+    portfolio_id: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    portfolio_value: Optional[float] = None
+    cash: Optional[float] = None
+    drawdown: Optional[float] = None
+    drawdown_pct: Optional[float] = None
+    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CleanTradeRecord(BaseModel):
+    """Validated, clean production trade record."""
+
+    trade_id: str
+    symbol: str
+    side: str
+    quantity: float = Field(gt=0)
+    entry_price: float = Field(gt=0)
+    exit_price: float = Field(gt=0)
+    entry_time: datetime
+    exit_time: datetime
+    pnl: float = 0.0
+    return_pct: float = 0.0
+    commission: float = Field(default=0.0, ge=0.0)
+    holding_period_bars: int = Field(default=0, ge=0)
+    validated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @model_validator(mode="after")
+    def validate_clean_trade(self) -> CleanTradeRecord:
+        side_norm = self.side.upper().strip()
+        if side_norm not in ("LONG", "SHORT", "BUY", "SELL"):
+            raise ValueError(f"Invalid trade side: {self.side}")
+        object.__setattr__(self, "side", side_norm)
+        if self.exit_time < self.entry_time:
+            raise ValueError(f"exit_time {self.exit_time} must be >= entry_time {self.entry_time}")
+        return self
+
+
+class CleanPositionRecord(BaseModel):
+    """Validated, clean production portfolio position record."""
+
+    position_id: Optional[int] = None
+    portfolio_id: str
+    symbol: str
+    name: str
+    asset_class: str = "EQUITY"
+    sector: Optional[str] = None
+    side: str
+    quantity: float = Field(gt=0)
+    entry_price: float = Field(gt=0)
+    current_price: float = Field(gt=0)
+    market_value: float
+    unrealized_pnl: float = 0.0
+    unrealized_pnl_pct: float = 0.0
+    validated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @model_validator(mode="after")
+    def validate_clean_position(self) -> CleanPositionRecord:
+        side_norm = self.side.upper().strip()
+        if side_norm not in ("LONG", "SHORT"):
+            raise ValueError(f"Invalid position side: {self.side}")
+        object.__setattr__(self, "side", side_norm)
+        return self
+
+
+class CleanEquityRecord(BaseModel):
+    """Validated, clean production portfolio equity curve record."""
+
+    curve_id: Optional[int] = None
+    portfolio_id: str
+    timestamp: datetime
+    portfolio_value: float = Field(ge=0)
+    cash: float
+    drawdown: float = Field(default=0.0, ge=0.0)
+    drawdown_pct: float = Field(default=0.0, ge=0.0, le=1.0)
+    validated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ExportValidationSummary(BaseModel):
+    """Summary metrics of an export cleaning and validation batch run."""
+
+    export_type: ExportType
+    total_raw_records: int = 0
+    valid_clean_records: int = 0
+    quarantined_records: int = 0
+    duplicate_records: int = 0
+    errors: List[ExportValidationError] = Field(default_factory=list)
+
+    @property
+    def is_clean(self) -> bool:
+        """True if all raw records were valid without quarantine or duplicates."""
+        return self.quarantined_records == 0 and self.duplicate_records == 0

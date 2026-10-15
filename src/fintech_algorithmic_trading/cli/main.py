@@ -18,7 +18,7 @@ from fintech_algorithmic_trading.engine.greeks import calculate_option_greeks
 from fintech_algorithmic_trading.engine.monte_carlo import MonteCarloEngine
 from fintech_algorithmic_trading.engine.risk_engine import PortfolioRiskEngine
 from fintech_algorithmic_trading.engine.var import VaRCalculator
-from fintech_algorithmic_trading.reporting import RiskReportGenerator
+from fintech_algorithmic_trading.reporting import DataExporter, RiskReportGenerator
 from fintech_algorithmic_trading.storage.repository import PortfolioRepository
 from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
 from fintech_algorithmic_trading.strategy import (
@@ -633,38 +633,7 @@ def clean_export_cmd(
         if not port:
             console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
             raise click.Abort()
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow([
-            "portfolio_id",
-            "symbol",
-            "name",
-            "asset_class",
-            "sector",
-            "side",
-            "quantity",
-            "entry_price",
-            "current_price",
-            "market_value",
-            "unrealized_pnl",
-            "unrealized_pnl_pct",
-        ])
-        for p in port.positions:
-            writer.writerow([
-                port.id,
-                p.asset.symbol,
-                p.asset.name,
-                p.asset.asset_class.value,
-                p.asset.sector or "",
-                p.side.value,
-                p.quantity,
-                p.entry_price,
-                p.current_price,
-                p.market_value,
-                round(p.unrealized_pnl, 2),
-                round(p.unrealized_pnl_pct, 4),
-            ])
-        csv_text = buf.getvalue()
+        csv_text = DataExporter.export_portfolio_positions_csv(port)
     elif exp_enum == ExportType.EQUITY_CURVE:
         default_port_id = portfolio or "global-macro"
         csv_text = (
@@ -820,7 +789,9 @@ def clean_export_cmd(
                     dict_writer.writeheader()
                     for rec in clean_records:
                         dict_writer.writerow(rec.model_dump())
-        console.print(f"[bold green]Saved {len(clean_records)} clean records to {output}[/bold green]")
+        console.print(
+            f"[bold green]Saved {len(clean_records)} clean records to {output}[/bold green]"
+        )
 
 
 @cli.command("sql-generate")
@@ -877,35 +848,39 @@ def sql_generate_cmd(
                 raise click.Abort()
             buf = io.StringIO()
             writer = csv.writer(buf)
-            writer.writerow([
-                "portfolio_id",
-                "symbol",
-                "name",
-                "asset_class",
-                "sector",
-                "side",
-                "quantity",
-                "entry_price",
-                "current_price",
-                "market_value",
-                "unrealized_pnl",
-                "unrealized_pnl_pct",
-            ])
+            writer.writerow(
+                [
+                    "portfolio_id",
+                    "symbol",
+                    "name",
+                    "asset_class",
+                    "sector",
+                    "side",
+                    "quantity",
+                    "entry_price",
+                    "current_price",
+                    "market_value",
+                    "unrealized_pnl",
+                    "unrealized_pnl_pct",
+                ]
+            )
             for p in port.positions:
-                writer.writerow([
-                    port.id,
-                    p.asset.symbol,
-                    p.asset.name,
-                    p.asset.asset_class.value,
-                    p.asset.sector or "",
-                    p.side.value,
-                    p.quantity,
-                    p.entry_price,
-                    p.current_price,
-                    p.market_value,
-                    round(p.unrealized_pnl, 2),
-                    round(p.unrealized_pnl_pct, 4),
-                ])
+                writer.writerow(
+                    [
+                        port.id,
+                        p.asset.symbol,
+                        p.asset.name,
+                        p.asset.asset_class.value,
+                        p.asset.sector or "",
+                        p.side.value,
+                        p.quantity,
+                        p.entry_price,
+                        p.current_price,
+                        p.market_value,
+                        round(p.unrealized_pnl, 2),
+                        round(p.unrealized_pnl_pct, 4),
+                    ]
+                )
             records = list(csv.DictReader(io.StringIO(buf.getvalue())))
         elif exp_enum == ExportType.EQUITY_CURVE:
             csv_text = (

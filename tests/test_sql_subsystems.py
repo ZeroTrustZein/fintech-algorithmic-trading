@@ -2,12 +2,9 @@
 
 from datetime import datetime, timedelta
 
-import pytest
-
 from fintech_algorithmic_trading import (
     BacktestConfig,
     BacktestEngine,
-    BacktestResult,
     BacktestTrade,
     Bar,
     CleanEquityRecord,
@@ -61,8 +58,12 @@ def test_data_exporter_export_and_clean_trades_from_backtest():
     """Verify DataExporter exports backtest trades into PostgreSQLExportPipeline."""
     bars = _generate_synthetic_bars("AAPL", count=60)
     config = BacktestConfig(initial_capital=100000.0, commission_bps=5.0)
-    engine = BacktestEngine(config=config, strategy=TrendFollowingMACDStrategy(fast_period=5, slow_period=15, signal_period=5))
-    result = engine.run(bars)
+    engine = BacktestEngine(config=config)
+    result = engine.run(
+        symbol="AAPL",
+        bars=bars,
+        strategy=TrendFollowingMACDStrategy(fast_period=5, slow_period=15, signal_period=5),
+    )
 
     clean_records, summary = DataExporter.export_and_clean_trades(result.trades)
     assert len(clean_records) == len(result.trades)
@@ -75,8 +76,12 @@ def test_data_exporter_export_and_clean_equity_curve():
     """Verify DataExporter exports backtest equity curve and verifies CleanEquityRecords."""
     bars = _generate_synthetic_bars("AAPL", count=40)
     config = BacktestConfig(initial_capital=50000.0)
-    engine = BacktestEngine(config=config, strategy=TrendFollowingMACDStrategy(fast_period=4, slow_period=10, signal_period=4))
-    result = engine.run(bars)
+    engine = BacktestEngine(config=config)
+    result = engine.run(
+        symbol="AAPL",
+        bars=bars,
+        strategy=TrendFollowingMACDStrategy(fast_period=4, slow_period=10, signal_period=4),
+    )
 
     clean_records, summary = DataExporter.export_and_clean_equity_curve(
         result, portfolio_id="MACD-ALPHA-1"
@@ -121,10 +126,14 @@ def test_data_exporter_export_to_sql_staging_domain_objects():
 def test_data_exporter_export_pipeline_staging_script():
     """Verify DataExporter constructs comprehensive SQL staging bundle."""
     portfolio = PortfolioRepository.get_benchmark_portfolios()["global-macro"]
-    bars = _generate_synthetic_bars("AAPL", count=30)
+    bars = _generate_synthetic_bars("AAPL", count=80)
     config = BacktestConfig(initial_capital=50000.0)
-    engine = BacktestEngine(config=config, strategy=TrendFollowingMACDStrategy())
-    result = engine.run(bars)
+    engine = BacktestEngine(config=config)
+    result = engine.run(
+        symbol="AAPL",
+        bars=bars,
+        strategy=TrendFollowingMACDStrategy(fast_period=4, slow_period=12, signal_period=4),
+    )
 
     script = DataExporter.export_pipeline_staging_script(
         portfolio=portfolio,
@@ -136,7 +145,8 @@ def test_data_exporter_export_pipeline_staging_script():
     assert "INSERT INTO raw_positions_export" in script
     assert "INSERT INTO raw_trades_export" in script
     assert "INSERT INTO raw_equity_curve_export" in script
-    assert "clean_and_validate_exports()" in script
+    assert "INSERT INTO export_validation_errors" in script
+    assert "INSERT INTO clean_trades" in script
 
 
 def test_pipeline_reconstruct_portfolio_from_clean_records():
@@ -193,10 +203,14 @@ def test_pipeline_reconstruct_trades_from_clean_records():
 
 def test_subsystem_backtest_to_sql_pipeline_end_to_end():
     """End-to-end integration: Strategy -> BacktestEngine -> DataExporter -> SQL Pipeline."""
-    bars = _generate_synthetic_bars("AAPL", count=70)
+    bars = _generate_synthetic_bars("AAPL", count=80)
     config = BacktestConfig(initial_capital=100000.0, commission_bps=5.0)
-    engine = BacktestEngine(config=config, strategy=TrendFollowingMACDStrategy())
-    result = engine.run(bars)
+    engine = BacktestEngine(config=config)
+    result = engine.run(
+        symbol="AAPL",
+        bars=bars,
+        strategy=TrendFollowingMACDStrategy(fast_period=4, slow_period=12, signal_period=4),
+    )
 
     # 1. Clean trades
     clean_trades, trade_sum = DataExporter.export_and_clean_trades(result.trades)
@@ -243,13 +257,13 @@ def test_subsystem_quarantine_dirty_domain_exports():
     dirty_trades = [
         BacktestTrade(
             trade_id="TR-CORRUPT",
-            symbol="",  # Empty symbol should violate SYMBOL_EMPTY
+            symbol="",  # Empty symbol should violate NOT_NULL_SYMBOL
             side=OrderSide.BUY,
-            quantity=-50.0,  # Negative quantity violates QUANTITY_NON_POSITIVE
+            quantity=-50.0,  # Negative quantity violates POSITIVE_QUANTITY
             entry_price=100.0,
             exit_price=105.0,
             entry_time=datetime(2026, 3, 2, 10, 0),
-            exit_time=datetime(2026, 3, 1, 10, 0),  # Exit before entry
+            exit_time=datetime(2026, 3, 1, 10, 0),  # Exit before entry: TEMPORAL_ORDER_VIOLATION
             pnl=250.0,
             return_pct=0.05,
             commission=1.0,
@@ -264,4 +278,4 @@ def test_subsystem_quarantine_dirty_domain_exports():
     rule_names = [e.rule_name for e in summary.errors]
     assert any("SYMBOL" in r for r in rule_names)
     assert any("QUANTITY" in r for r in rule_names)
-    assert any("TIMESTAMP" in r or "TIME" in r for r in rule_names)
+    assert any("TEMPORAL" in r or "ORDER" in r for r in rule_names)

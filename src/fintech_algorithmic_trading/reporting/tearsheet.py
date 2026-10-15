@@ -389,7 +389,7 @@ class DataExporter:
             dd_pct = dd / peak if peak > 0 else 0.0
             raw_records.append(
                 {
-                    "curve_id": f"curve-{i+1}",
+                    "curve_id": i + 1,
                     "portfolio_id": portfolio_id,
                     "timestamp": t + timedelta(days=i),
                     "portfolio_value": val,
@@ -483,7 +483,7 @@ class DataExporter:
                 dd_pct = dd / peak if peak > 0 else 0.0
                 raw_eq.append(
                     {
-                        "curve_id": f"curve-{i+1}",
+                        "curve_id": i + 1,
                         "portfolio_id": pid,
                         "timestamp": t + timedelta(days=i),
                         "portfolio_value": val,

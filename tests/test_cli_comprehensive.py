@@ -320,6 +320,186 @@ def test_cli_report_stdout_and_file_export(cli_runner: CliRunner, tmp_path):
     assert "Error: Portfolio 'bad-portfolio' not found." in res_err.output
 
 
+def test_cli_sql_schema_ddl_and_validate_script(cli_runner: CliRunner, tmp_path):
+    """Test 'sql-schema' DDL output, validation script, and file output."""
+    res_ddl = cli_runner.invoke(cli, ["sql-schema"])
+    assert res_ddl.exit_code == 0
+    assert "CREATE TABLE IF NOT EXISTS raw_trades_export" in res_ddl.output
+    assert "clean_trades" in res_ddl.output
+
+    res_script = cli_runner.invoke(cli, ["sql-schema", "--validate-script"])
+    assert res_script.exit_code == 0
+    assert "export_validation_errors" in res_script.output
+    assert "INSERT INTO clean_trades" in res_script.output
+
+    out_file = str(tmp_path / "schema.sql")
+    res_out = cli_runner.invoke(cli, ["sql-schema", "-o", out_file])
+    assert res_out.exit_code == 0
+    assert "SQL successfully saved to" in res_out.output
+    assert os.path.exists(out_file)
+    with open(out_file, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "raw_trades_export" in content
+
+
+def test_cli_clean_export_trades_default_and_json(cli_runner: CliRunner):
+    """Test 'clean-export' with default trades and JSON output."""
+    res_table = cli_runner.invoke(cli, ["clean-export", "--type", "trades"])
+    assert res_table.exit_code == 0
+    assert "Export Validation Summary" in res_table.output
+    assert "TRADES" in res_table.output
+    assert "Total Raw Records" in res_table.output
+    assert "Clean / Valid Records" in res_table.output
+
+    res_json = cli_runner.invoke(cli, ["clean-export", "--type", "trades", "--json-out"])
+    assert res_json.exit_code == 0
+    data = json.loads(res_json.output)
+    assert "summary" in data
+    assert "clean_records" in data
+    assert data["summary"]["total_raw_records"] == 3
+    assert data["summary"]["valid_clean_records"] == 3
+    assert len(data["clean_records"]) == 3
+    assert data["clean_records"][0]["symbol"] == "SPY"
+
+
+def test_cli_clean_export_positions_and_equity(cli_runner: CliRunner):
+    """Test 'clean-export' for positions and equity curve datasets."""
+    res_pos = cli_runner.invoke(
+        cli, ["clean-export", "--type", "positions", "--portfolio", "tech-momentum"]
+    )
+    assert res_pos.exit_code == 0
+    assert "Export Validation Summary" in res_pos.output
+    assert "POSITIONS" in res_pos.output
+    assert "Clean Validated Records Preview" in res_pos.output
+
+    res_eq = cli_runner.invoke(cli, ["clean-export", "--type", "equity"])
+    assert res_eq.exit_code == 0
+    assert "Export Validation Summary" in res_eq.output
+    assert "EQUITY_CURVE" in res_eq.output
+
+    # Invalid portfolio
+    res_bad = cli_runner.invoke(
+        cli, ["clean-export", "--type", "positions", "--portfolio", "bad-portfolio"]
+    )
+    assert res_bad.exit_code != 0
+    assert "Error: Portfolio 'bad-portfolio' not found." in res_bad.output
+
+
+def test_cli_clean_export_custom_file_and_errors(cli_runner: CliRunner, tmp_path):
+    """Test 'clean-export' with raw CSV file containing dirty, duplicate, and error records."""
+    csv_file = tmp_path / "dirty_trades.csv"
+    csv_file.write_text(
+        "trade_id,symbol,side,quantity,entry_price,exit_price,entry_time,exit_time,pnl,return_pct,commission,holding_period_bars\n"
+        "T-001,SPY,BUY,100,500.0,505.0,2026-03-01T09:30:00,2026-03-01T15:30:00,500.0,0.01,2.0,6\n"
+        "T-001,SPY,BUY,100,500.0,505.0,2026-03-01T09:30:00,2026-03-01T15:30:00,500.0,0.01,2.0,6\n"  # Duplicate
+        "T-002,AAPL,BUY,-50,180.0,175.0,2026-03-02T10:00:00,2026-03-02T14:00:00,-250.0,-0.02,1.5,4\n"  # Negative qty
+        "T-003,MSFT,HODL,100,400.0,410.0,2026-03-03T10:00:00,2026-03-03T15:00:00,1000.0,0.025,2.0,5\n",  # Bad side
+        encoding="utf-8",
+    )
+
+    json_out_file = str(tmp_path / "clean_trades.json")
+    res = cli_runner.invoke(
+        cli,
+        [
+            "clean-export",
+            "--type",
+            "trades",
+            "--file",
+            str(csv_file),
+            "--output",
+            json_out_file,
+            "--json-out",
+        ],
+    )
+    assert res.exit_code == 0
+    assert os.path.exists(json_out_file)
+
+    with open(json_out_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["summary"]["total_raw_records"] == 4
+    assert data["summary"]["valid_clean_records"] == 1
+    assert data["summary"]["duplicate_records"] == 1
+    assert data["summary"]["quarantined_records"] == 2
+    assert len(data["summary"]["errors"]) >= 2
+
+    # CSV output mode
+    csv_out_file = str(tmp_path / "clean_trades.csv")
+    res_csv = cli_runner.invoke(
+        cli,
+        [
+            "clean-export",
+            "--type",
+            "trades",
+            "--file",
+            str(csv_file),
+            "--output",
+            csv_out_file,
+        ],
+    )
+    assert res_csv.exit_code == 0
+    assert os.path.exists(csv_out_file)
+    assert "Saved 1 clean records to" in res_csv.output
+    with open(csv_out_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    assert len(lines) == 2  # header + 1 record
+
+
+def test_cli_sql_generate_inserts_and_copy(cli_runner: CliRunner, tmp_path):
+    """Test 'sql-generate' bulk INSERT and COPY statements across export types."""
+    res_trades = cli_runner.invoke(cli, ["sql-generate", "--type", "trades"])
+    assert res_trades.exit_code == 0
+    assert "INSERT INTO raw_trades_export" in res_trades.output
+    assert "VALUES" in res_trades.output
+
+    res_copy = cli_runner.invoke(cli, ["sql-generate", "--type", "positions", "--copy-command"])
+    assert res_copy.exit_code == 0
+    assert "COPY raw_positions_export FROM" in res_copy.output
+    assert "/data/exports/positions.csv" in res_copy.output
+
+    custom_copy = cli_runner.invoke(
+        cli,
+        [
+            "sql-generate",
+            "--type",
+            "equity",
+            "--copy-command",
+            "--file",
+            "/var/data/raw_equity.csv",
+        ],
+    )
+    assert custom_copy.exit_code == 0
+    assert "COPY raw_equity_curve_export FROM" in custom_copy.output
+    assert "/var/data/raw_equity.csv" in custom_copy.output
+
+    out_sql = str(tmp_path / "generated.sql")
+    res_file = cli_runner.invoke(
+        cli,
+        [
+            "sql-generate",
+            "--type",
+            "positions",
+            "--portfolio",
+            "multi-asset-balanced",
+            "--output",
+            out_sql,
+        ],
+    )
+    assert res_file.exit_code == 0
+    assert "SQL written to" in res_file.output
+    assert os.path.exists(out_sql)
+    with open(out_sql, "r", encoding="utf-8") as f:
+        sql_content = f.read()
+    assert "INSERT INTO raw_positions_export" in sql_content
+    assert "multi-asset-balanced" in sql_content
+
+    # Error handling
+    res_err = cli_runner.invoke(
+        cli, ["sql-generate", "--type", "positions", "--portfolio", "bad-portfolio"]
+    )
+    assert res_err.exit_code != 0
+    assert "Error: Portfolio 'bad-portfolio' not found." in res_err.output
+
+
 def test_package_main_invocation(monkeypatch):
     """Verify package __main__ invokes cli properly."""
     called = False

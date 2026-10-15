@@ -1,6 +1,7 @@
 """Comprehensive unit and integration test suite for Stage 3 Core Logic: PostgreSQL SQL export pipeline."""
 
 from datetime import datetime
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,7 +27,7 @@ from fintech_algorithmic_trading import (
 
 def test_process_trades_clean_batch():
     """Verify clean batch of raw trades transforms completely into CleanTradeRecord objects."""
-    raw_trades = [
+    raw_trades: list[dict[str, Any] | RawTradeExport] = [
         {
             "trade_id": "T-100",
             "symbol": "AAPL",

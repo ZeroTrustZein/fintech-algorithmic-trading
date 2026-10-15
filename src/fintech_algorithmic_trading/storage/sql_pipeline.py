@@ -34,6 +34,32 @@ class PostgreSQLExportPipeline:
 
     SQL_DIR = Path(__file__).parent / "sql"
 
+    STAGING_COLUMNS: Dict[ExportType, Tuple[str, List[str]]] = {
+        ExportType.TRADES: (
+            "raw_trades_export",
+            [
+                "trade_id", "symbol", "side", "quantity", "entry_price",
+                "exit_price", "entry_time", "exit_time", "pnl",
+                "return_pct", "commission", "holding_period_bars"
+            ],
+        ),
+        ExportType.POSITIONS: (
+            "raw_positions_export",
+            [
+                "portfolio_id", "symbol", "name", "asset_class", "sector",
+                "side", "quantity", "entry_price", "current_price",
+                "market_value", "unrealized_pnl", "unrealized_pnl_pct"
+            ],
+        ),
+        ExportType.EQUITY_CURVE: (
+            "raw_equity_curve_export",
+            [
+                "portfolio_id", "timestamp", "portfolio_value",
+                "cash", "drawdown", "drawdown_pct"
+            ],
+        ),
+    }
+
     @classmethod
     def get_schema_ddl(cls) -> str:
         """Return the PostgreSQL schema DDL for staging, cleaning, and error tables."""
@@ -56,6 +82,13 @@ class PostgreSQLExportPipeline:
         if hasattr(record, "model_dump"):
             return record.model_dump()
         return dict(record)
+
+    @staticmethod
+    def _parse_iso_datetime(val: Union[str, datetime]) -> datetime:
+        """Parse ISO timestamp string or return datetime object."""
+        if isinstance(val, str):
+            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        return val
 
     @staticmethod
     def generate_copy_command(table_name: str, csv_file_path: str) -> str:
@@ -204,12 +237,8 @@ class PostgreSQLExportPipeline:
         if errors:
             raise ValueError(f"Trade validation failed: {'; '.join(errors)}")
 
-        entry_t = rec["entry_time"]
-        if isinstance(entry_t, str):
-            entry_t = datetime.fromisoformat(entry_t.replace("Z", "+00:00"))
-        exit_t = rec["exit_time"]
-        if isinstance(exit_t, str):
-            exit_t = datetime.fromisoformat(exit_t.replace("Z", "+00:00"))
+        entry_t = cls._parse_iso_datetime(rec["entry_time"])
+        exit_t = cls._parse_iso_datetime(rec["exit_time"])
 
         return CleanTradeRecord(
             trade_id=str(rec["trade_id"]).strip(),
@@ -260,9 +289,7 @@ class PostgreSQLExportPipeline:
         if errors:
             raise ValueError(f"Equity curve validation failed: {'; '.join(errors)}")
 
-        ts = rec["timestamp"]
-        if isinstance(ts, str):
-            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        ts = cls._parse_iso_datetime(rec["timestamp"])
 
         return CleanEquityRecord(
             curve_id=rec.get("curve_id"),

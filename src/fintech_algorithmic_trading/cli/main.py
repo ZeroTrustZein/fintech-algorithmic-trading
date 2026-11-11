@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sys
 from typing import Optional
 
 import click
@@ -46,7 +47,10 @@ console = Console()
 @click.version_option(version="0.1.0", prog_name="fintech-algorithmic-trading")
 def cli():
     """FinTech Algorithmic Trading Risk Engine & Monte Carlo VaR Analyzer."""
-    pass
+    # Greek letters / box chars crash cp1252 Windows consoles.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 @cli.command("list-portfolios")
@@ -95,9 +99,15 @@ def list_portfolios_cmd(json_out: bool = False):
 @cli.command("analyze-var")
 @click.option("--portfolio", "-p", default="global-macro", help="Portfolio preset ID")
 @click.option(
-    "--confidence", "-c", default=0.95, type=float, help="Confidence level (e.g. 0.95, 0.99)"
+    "--confidence",
+    "-c",
+    default=0.95,
+    type=click.FloatRange(0, 1, min_open=True, max_open=True),
+    help="Confidence level (e.g. 0.95, 0.99)",
 )
-@click.option("--horizon", "-h", default=1, type=int, help="Holding horizon in trading days")
+@click.option(
+    "--horizon", "-h", default=1, type=click.IntRange(min=1), help="Holding horizon in trading days"
+)
 @click.option("--json-out", is_flag=True, help="Output raw JSON")
 def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: bool):
     """Compute Historical, Parametric, and Cornish-Fisher VaR & Expected Shortfall."""
@@ -158,8 +168,16 @@ def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: b
 
 @cli.command("simulate")
 @click.option("--portfolio", "-p", default="tech-momentum", help="Portfolio preset ID")
-@click.option("--sims", "-n", default=2000, type=int, help="Number of Monte Carlo paths")
-@click.option("--horizon", "-h", default=21, type=int, help="Forecast horizon in days")
+@click.option(
+    "--sims",
+    "-n",
+    default=2000,
+    type=click.IntRange(100, 100000),
+    help="Number of Monte Carlo paths",
+)
+@click.option(
+    "--horizon", "-h", default=21, type=click.IntRange(1, 1260), help="Forecast horizon in days"
+)
 @click.option(
     "--model",
     "-m",
@@ -327,10 +345,34 @@ def check_limits_cmd(portfolio: str, max_leverage: float, max_pos: float, max_se
 
 @cli.command("greeks")
 @click.option("--type", "option_type", type=click.Choice(["CALL", "PUT"]), default="CALL")
-@click.option("--spot", "-s", default=100.0, type=float, help="Underlying spot price")
-@click.option("--strike", "-k", default=100.0, type=float, help="Strike price")
-@click.option("--time", "-t", default=0.25, type=float, help="Years to expiration")
-@click.option("--vol", "-v", default=0.20, type=float, help="Implied volatility")
+@click.option(
+    "--spot",
+    "-s",
+    default=100.0,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Underlying spot price",
+)
+@click.option(
+    "--strike",
+    "-k",
+    default=100.0,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Strike price",
+)
+@click.option(
+    "--time",
+    "-t",
+    default=0.25,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Years to expiration",
+)
+@click.option(
+    "--vol",
+    "-v",
+    default=0.20,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Implied volatility",
+)
 @click.option("--rate", "-r", default=0.045, type=float, help="Risk-free rate")
 def greeks_cmd(
     option_type: str,
@@ -373,8 +415,14 @@ def greeks_cmd(
     default="composite",
     help="Alpha strategy model",
 )
-@click.option("--bars", "-b", default=252, type=int, help="Historical bars count")
-@click.option("--capital", "-c", default=100_000.0, type=float, help="Initial capital")
+@click.option("--bars", "-b", default=252, type=click.IntRange(min=1), help="Historical bars count")
+@click.option(
+    "--capital",
+    "-c",
+    default=100_000.0,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Initial capital",
+)
 def backtest_cmd(symbol: str, strategy: str, bars: int, capital: float):
     """Run event-driven backtest with realistic execution slippage and commissions."""
     feed = MarketDataFeed()

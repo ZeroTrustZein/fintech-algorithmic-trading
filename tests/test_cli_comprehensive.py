@@ -3,6 +3,7 @@
 import json
 import os
 
+import pytest
 from click.testing import CliRunner
 
 from fintech_algorithmic_trading import __main__ as pkg_main
@@ -511,3 +512,19 @@ def test_package_main_invocation(monkeypatch):
     monkeypatch.setattr(pkg_main, "cli", dummy_cli)
     pkg_main.cli()
     assert called is True
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["analyze-var", "--confidence", "2"],
+        ["greeks", "--spot", "-5"],
+        ["simulate", "--sims", "0"],
+        ["backtest", "--bars", "0"],
+    ],
+)
+def test_cli_rejects_invalid_numeric_options(cli_runner: CliRunner, args):
+    """Bad numeric options must fail with usage error (2), not a traceback."""
+    res = cli_runner.invoke(cli, args)
+    assert res.exit_code == 2
+    assert "Invalid value" in res.output

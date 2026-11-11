@@ -195,10 +195,9 @@ jobs:
           risk-engine --help
           fintech-algorithmic-trading list-portfolios
           fintech-algorithmic-trading sql-schema
-          fintech-algorithmic-trading sql-validate-script
-          fintech-algorithmic-trading clean-export --data-type trades
-          fintech-algorithmic-trading clean-export --data-type positions
-          fintech-algorithmic-trading clean-export --data-type equity
-          fintech-algorithmic-trading sql-generate-inserts --data-type trades
-          fintech-algorithmic-trading sql-generate-copy --data-type trades
-          fintech-algorithmic-trading sql-verify-exports
+          fintech-algorithmic-trading sql-schema --validate-script
+          fintech-algorithmic-trading clean-export --type trades
+          fintech-algorithmic-trading clean-export --type positions
+          fintech-algorithmic-trading clean-export --type equity
+          fintech-algorithmic-trading sql-generate --type trades
+          fintech-algorithmic-trading sql-generate --type trades --copy-command

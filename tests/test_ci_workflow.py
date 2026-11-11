@@ -90,8 +90,7 @@ def test_ci_workflow_postgres_service_and_build():
     wheel_step = next(s for s in steps if s.get("name") == "Test installation from wheel")
     run_script = wheel_step["run"]
     assert "sql-schema" in run_script
-    assert "sql-validate-script" in run_script
+    assert "sql-schema --validate-script" in run_script
     assert "clean-export" in run_script
-    assert "sql-generate-inserts" in run_script
-    assert "sql-generate-copy" in run_script
-    assert "sql-verify-exports" in run_script
+    assert "sql-generate --type trades" in run_script
+    assert "--copy-command" in run_script

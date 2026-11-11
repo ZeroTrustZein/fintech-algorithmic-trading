@@ -60,13 +60,13 @@ fintech-algorithmic-trading analyze-var -p tech-momentum -c 0.99 -h 10
 Simulate multi-asset correlated trajectories across market regimes:
 ```bash
 # Standard Geometric Brownian Motion
-fintech-algorithmic-trading simulate --portfolio tech-momentum --sims 2000 --days 21 --drift GBM
+fintech-algorithmic-trading simulate --portfolio tech-momentum --sims 2000 --horizon 21 --model GBM
 
 # Merton Jump-Diffusion (liquidity shocks & flash crashes)
-fintech-algorithmic-trading simulate --portfolio crypto-fx-alpha --sims 5000 --days 30 --drift JUMP_DIFFUSION
+fintech-algorithmic-trading simulate --portfolio crypto-fx-alpha --sims 5000 --horizon 30 --model JUMP_DIFFUSION
 
 # Ornstein-Uhlenbeck Mean-Reverting Drift
-fintech-algorithmic-trading simulate --portfolio multi-asset-balanced --sims 3000 --days 63 --drift MEAN_REVERTING
+fintech-algorithmic-trading simulate --portfolio multi-asset-balanced --sims 3000 --horizon 63 --model MEAN_REVERTING
 ```
 
 ---
@@ -74,12 +74,12 @@ fintech-algorithmic-trading simulate --portfolio multi-asset-balanced --sims 300
 ### 2.4 Crisis Stress Testing
 Stress-test portfolios against historical macroeconomic shocks:
 ```bash
-# Test all historical crisis scenarios (2008 Lehman, 2020 Covid, 2022 Rates Shock)
+# Test all historical crisis scenarios (2008 Lehman, 2020 Covid, 2022 Rates Hike, Flash Crash)
 fintech-algorithmic-trading stress-test --portfolio multi-asset-balanced
 
 # Target a specific shock scenario
-fintech-algorithmic-trading stress-test --portfolio global-macro --scenario lehman-2008
-fintech-algorithmic-trading stress-test --portfolio crypto-fx-alpha --scenario crypto-winter
+fintech-algorithmic-trading stress-test --portfolio global-macro --scenario 2008-lehman
+fintech-algorithmic-trading stress-test --portfolio crypto-fx-alpha --scenario flash-crash-liquidity-freeze
 ```
 
 ---
@@ -96,10 +96,10 @@ fintech-algorithmic-trading check-limits --portfolio global-macro
 Calculate theoretical contract price and Black-Scholes sensitivities ($\Delta, \Gamma, \mathcal{V}, \Theta, \rho$):
 ```bash
 # 3-month Out-of-the-Money Call Option
-fintech-algorithmic-trading greeks --type CALL --spot 500.0 --strike 510.0 --expiry 0.25 --vol 0.22 --rate 0.045
+fintech-algorithmic-trading greeks --type CALL --spot 500.0 --strike 510.0 --time 0.25 --vol 0.22 --rate 0.045
 
 # At-the-Money Put Option
-fintech-algorithmic-trading greeks --type PUT --spot 100.0 --strike 100.0 --expiry 0.50 --vol 0.35 --rate 0.04
+fintech-algorithmic-trading greeks --type PUT --spot 100.0 --strike 100.0 --time 0.50 --vol 0.35 --rate 0.04
 ```
 
 ---
@@ -356,10 +356,10 @@ print("Risk Contributions:", res_rp.risk_contributions)
 ```python
 from fintech_algorithmic_trading.backtest import BacktestEngine
 from fintech_algorithmic_trading.strategy import TrendFollowingMACDStrategy
-from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.data import MarketDataFeed
 from fintech_algorithmic_trading.types import BacktestConfig
 
-bars = PortfolioRepository.generate_synthetic_bars("SPY", n_bars=300, start_price=500.0)
+bars = MarketDataFeed().generate_synthetic_history("SPY", start_price=500.0, n_bars=300)
 strategy = TrendFollowingMACDStrategy()
 
 config = BacktestConfig(
@@ -385,18 +385,18 @@ Run an event-driven backtest, export raw trades, and validate them through `Post
 ```python
 from fintech_algorithmic_trading.backtest import BacktestEngine
 from fintech_algorithmic_trading.strategy import TrendFollowingMACDStrategy
-from fintech_algorithmic_trading.storage.repository import PortfolioRepository
+from fintech_algorithmic_trading.data import MarketDataFeed
 from fintech_algorithmic_trading.reporting.tearsheet import DataExporter
 from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPipeline
 from fintech_algorithmic_trading.types import ExportType
 
 # 1. Execute backtest
-bars = PortfolioRepository.generate_synthetic_bars("QQQ", n_bars=350, start_price=400.0)
+bars = MarketDataFeed().generate_synthetic_history("QQQ", start_price=400.0, n_bars=350)
 engine = BacktestEngine()
 result = engine.run("QQQ", bars, TrendFollowingMACDStrategy())
 
 # 2. Export & Clean trades directly
-summary, clean_trades = DataExporter.export_and_clean_trades(result.trades)
+clean_trades, summary = DataExporter.export_and_clean_trades(result.trades)
 print(f"Total Raw Trades:  {summary.total_raw_records}")
 print(f"Valid Clean Trades:{summary.valid_clean_records}")
 print(f"Quarantined:       {summary.quarantined_records}")
@@ -456,13 +456,13 @@ raw_positions = [
 ]
 
 # Clean positions
-summary, clean_positions = PostgreSQLExportPipeline.process_positions(raw_positions)
+clean_positions, summary = PostgreSQLExportPipeline.process_positions(raw_positions)
 
 # Reconstruct live domain Portfolio object
 portfolio = PostgreSQLExportPipeline.reconstruct_portfolio(
     portfolio_id="prod-desk-1",
     clean_positions=clean_positions,
-    initial_cash=50_000.0,
+    cash=50_000.0,
 )
 
 print(f"Reconstructed Portfolio: {portfolio.id}")

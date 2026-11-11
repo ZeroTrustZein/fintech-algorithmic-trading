@@ -485,9 +485,9 @@ Package: `fintech_algorithmic_trading.reporting.tearsheet`
 - `export_equity_curve_csv(result: Union[BacktestResult, List[float]]) -> str`
 - `export_stress_test_json(results: List[StressTestResult]) -> str`
 - `export_stress_test_csv(results: List[StressTestResult]) -> str`
-- `export_and_clean_trades(trades: List[BacktestTrade]) -> Tuple[ExportValidationSummary, List[CleanTradeRecord]]`
-- `export_and_clean_positions(portfolio: Portfolio) -> Tuple[ExportValidationSummary, List[CleanPositionRecord]]`
-- `export_and_clean_equity_curve(result: BacktestResult, portfolio_id: str = "backtest-account") -> Tuple[ExportValidationSummary, List[CleanEquityRecord]]`
+- `export_and_clean_trades(trades: List[BacktestTrade]) -> Tuple[List[CleanTradeRecord], ExportValidationSummary]`
+- `export_and_clean_positions(portfolio: Portfolio) -> Tuple[List[CleanPositionRecord], ExportValidationSummary]`
+- `export_and_clean_equity_curve(result: BacktestResult, portfolio_id: str = "backtest-account") -> Tuple[List[CleanEquityRecord], ExportValidationSummary]`
 - `export_to_sql_staging(data: Any, export_type: ExportType, method: str = "insert") -> str`
 - `export_pipeline_staging_script(trades: Optional[List[BacktestTrade]] = None, portfolio: Optional[Portfolio] = None, backtest_result: Optional[BacktestResult] = None) -> str`
 
@@ -502,10 +502,10 @@ Package: `fintech_algorithmic_trading.storage.repository`
   - Presets: `"global-macro"`, `"tech-momentum"`, `"multi-asset-balanced"`, `"crypto-fx-alpha"`.
 - `get_portfolio(portfolio_id: str) -> Optional[Portfolio]`
 - `get_stress_scenarios() -> Dict[str, StressScenario]`
-  - Scenarios: `"lehman-2008"`, `"covid-2020"`, `"rates-shock-2022"`, `"tech-rout"`, `"crypto-winter"`.
+  - Scenarios: `"2008-lehman"`, `"2020-covid-crash"`, `"2022-inflation-rates-hike"`, `"flash-crash-liquidity-freeze"`.
 - `get_stress_scenario(scenario_id: str) -> Optional[StressScenario]`
-- `generate_synthetic_bars(symbol: str, n_bars: int = 252, start_price: float = 100.0, annual_drift: float = 0.08, annual_vol: float = 0.20, seed: Optional[int] = 42) -> List[Bar]`
-- `generate_synthetic_returns(n_days: int = 750, mean_daily: float = 0.0003, vol_daily: float = 0.012, fat_tailed: bool = True, seed: Optional[int] = 42) -> np.ndarray`
+- OHLCV bars: `MarketDataFeed().generate_synthetic_history(symbol, start_price=100.0, n_bars=252, volatility_annual=0.20, drift_annual=0.08, seed=42) -> List[Bar]` (`fintech_algorithmic_trading.data`).
+- `generate_synthetic_returns(n_days: int = 500, mean_daily: float = 0.0004, vol_daily: float = 0.012, fat_tailed: bool = True, seed: Optional[int] = 42) -> np.ndarray`
 
 ---
 
@@ -533,27 +533,45 @@ class PostgreSQLExportPipeline:
     @classmethod
     def validate_trade_record(cls, record: Union[Dict[str, Any], RawTradeExport]) -> List[str]: ...
     @classmethod
-    def validate_position_record(cls, record: Union[Dict[str, Any], RawPositionExport]) -> List[str]: ...
+    def validate_position_record(
+        cls, record: Union[Dict[str, Any], RawPositionExport]
+    ) -> List[str]: ...
     @classmethod
-    def validate_equity_record(cls, record: Union[Dict[str, Any], RawEquityCurveExport]) -> List[str]: ...
+    def validate_equity_record(
+        cls, record: Union[Dict[str, Any], RawEquityCurveExport]
+    ) -> List[str]: ...
     @classmethod
     def clean_trade(cls, record: Union[Dict[str, Any], RawTradeExport]) -> CleanTradeRecord: ...
     @classmethod
-    def clean_position(cls, record: Union[Dict[str, Any], RawPositionExport]) -> CleanPositionRecord: ...
+    def clean_position(
+        cls, record: Union[Dict[str, Any], RawPositionExport]
+    ) -> CleanPositionRecord: ...
     @classmethod
-    def clean_equity(cls, record: Union[Dict[str, Any], RawEquityCurveExport]) -> CleanEquityRecord: ...
+    def clean_equity(
+        cls, record: Union[Dict[str, Any], RawEquityCurveExport]
+    ) -> CleanEquityRecord: ...
 
     # 3. Batch Processing & Deduplication
     @classmethod
-    def process_trades(cls, raw_records: Sequence[Union[Dict[str, Any], RawTradeExport]]) -> Tuple[ExportValidationSummary, List[CleanTradeRecord]]: ...
+    def process_trades(
+        cls, raw_records: Sequence[Union[Dict[str, Any], RawTradeExport]]
+    ) -> Tuple[List[CleanTradeRecord], ExportValidationSummary]: ...
     @classmethod
-    def process_positions(cls, raw_records: Sequence[Union[Dict[str, Any], RawPositionExport]]) -> Tuple[ExportValidationSummary, List[CleanPositionRecord]]: ...
+    def process_positions(
+        cls, raw_records: Sequence[Union[Dict[str, Any], RawPositionExport]]
+    ) -> Tuple[List[CleanPositionRecord], ExportValidationSummary]: ...
     @classmethod
-    def process_equity_curve(cls, raw_records: Sequence[Union[Dict[str, Any], RawEquityCurveExport]]) -> Tuple[ExportValidationSummary, List[CleanEquityRecord]]: ...
+    def process_equity_curve(
+        cls, raw_records: Sequence[Union[Dict[str, Any], RawEquityCurveExport]]
+    ) -> Tuple[List[CleanEquityRecord], ExportValidationSummary]: ...
     @classmethod
-    def process_export(cls, export_type: ExportType, raw_records: Sequence[Any]) -> Tuple[ExportValidationSummary, List[Any]]: ...
+    def process_export(
+        cls, export_type: ExportType, raw_records: Sequence[Any]
+    ) -> Tuple[List[Any], ExportValidationSummary]: ...
     @classmethod
-    def process_csv(cls, csv_content_or_path: str, export_type: ExportType) -> Tuple[ExportValidationSummary, List[Any]]: ...
+    def process_csv(
+        cls, csv_content_or_path: str, export_type: ExportType
+    ) -> Tuple[List[Any], ExportValidationSummary]: ...
 
     # 4. Database Integration & Roundtrip Reconstruction
     @classmethod
@@ -570,7 +588,8 @@ class PostgreSQLExportPipeline:
         cls,
         portfolio_id: str,
         clean_positions: Sequence[CleanPositionRecord],
-        initial_cash: float = 0.0,
+        name: Optional[str] = None,
+        cash: float = 0.0,
     ) -> Portfolio: ...
     @classmethod
     def reconstruct_trades(
@@ -584,5 +603,5 @@ class PostgreSQLExportPipeline:
 - **`get_clean_validate_sql()`**: Returns idempotent SQL transformation script with window functions for deduplication, rule logging, and INSERT INTO clean tables.
 - **`generate_copy_command(table_name, csv_file_path)`**: Emits PostgreSQL `\copy` command for high-throughput bulk ingestion.
 - **`generate_staging_insert_sql(export_type, raw_records)`**: Generates sanitized multi-row SQL INSERT statements for staging tables.
-- **`process_export(export_type, raw_records)`**: Unified entry point for batch validation and deduplication, returning an `ExportValidationSummary` and list of clean typed models.
+- **`process_export(export_type, raw_records)`**: Unified entry point for batch validation and deduplication, returning `(clean_models, ExportValidationSummary)`.
 - **`reconstruct_portfolio(...)` / `reconstruct_trades(...)`**: Converts validated database records back into native `Portfolio` and `BacktestTrade` domain instances.

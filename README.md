@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Type Checked: Mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
-[![Test Coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/zein/fintech-algorithmic-trading)
+[![Test Coverage: 97%](https://img.shields.io/badge/coverage-97%25-brightgreen.svg)](https://github.com/zein/fintech-algorithmic-trading)
 
 A high-performance quantitative risk management engine, multi-asset Monte Carlo Value-at-Risk (VaR) analyzer, and event-driven backtesting platform built for institutional algorithmic trading strategies.
 
@@ -62,7 +62,7 @@ Detailed technical guides and reference manuals are available in the [`docs/`](d
   - Automated emergency kill-switch for immediate portfolio de-leveraging.
   - Real-time margin utilization warning and critical alerts.
 - **Crisis Stress Testing & Institutional Reporting**:
-  - Historical crisis scenarios (2008 Lehman shock, 2020 Covid liquidity freeze, 2022 Rates repricing, Tech Rout, Crypto Winter).
+  - Historical crisis scenarios (2008 Lehman shock, 2020 Covid liquidity freeze, 2022 Inflation/rates hike, Flash-crash liquidity freeze).
   - Publication-ready Markdown tearsheets and JSON/CSV export utilities.
 - **PostgreSQL Raw Export Cleaning & Validation Pipeline**:
   - High-throughput two-tier ELT architecture: bulk unconstrained staging ingestion into PostgreSQL (`raw_trades_export`, `raw_positions_export`, `raw_equity_curve_export`).
@@ -217,7 +217,7 @@ pip install -e ".[dev]"
 | `simulate` | Correlated Monte Carlo simulation | `fintech-algorithmic-trading simulate -p tech-momentum --sims 2000` |
 | `stress-test` | Macro crisis stress testing | `fintech-algorithmic-trading stress-test -p multi-asset-balanced` |
 | `check-limits` | Audit portfolio against risk policy mandate | `fintech-algorithmic-trading check-limits -p global-macro` |
-| `greeks` | Compute analytical Black-Scholes option Greeks | `fintech-algorithmic-trading greeks -t CALL -s 500 -k 505 -e 0.25 -v 0.2` |
+| `greeks` | Compute analytical Black-Scholes option Greeks | `fintech-algorithmic-trading greeks --type CALL -s 500 -k 505 -t 0.25 -v 0.2` |
 | `backtest` | Run event-driven historical simulation | `fintech-algorithmic-trading backtest -s SPY --strategy composite` |
 | `surveillance` | Real-time circuit breaker & drawdown surveillance | `fintech-algorithmic-trading surveillance -p tech-momentum` |
 | `orderbook` | Inspect Level 2 order book market depth | `fintech-algorithmic-trading orderbook -s NVDA --levels 5` |
@@ -265,10 +265,28 @@ from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPip
 from fintech_algorithmic_trading.types import ExportType
 
 raw_trades = [
-    {"trade_id": "T-101", "symbol": "AAPL", "side": "BUY", "quantity": 100, "entry_price": 180.0, "exit_price": 185.0, "entry_time": "2026-01-02T10:00:00Z", "exit_time": "2026-01-02T15:00:00Z"},
-    {"trade_id": "T-102", "symbol": "", "side": "INVALID", "quantity": -50, "entry_price": 0.0, "exit_price": -10.0, "entry_time": "2026-01-03T10:00:00Z", "exit_time": "2026-01-02T10:00:00Z"},  # Invalid
+    {
+        "trade_id": "T-101",
+        "symbol": "AAPL",
+        "side": "BUY",
+        "quantity": 100,
+        "entry_price": 180.0,
+        "exit_price": 185.0,
+        "entry_time": "2026-01-02T10:00:00Z",
+        "exit_time": "2026-01-02T15:00:00Z",
+    },
+    {
+        "trade_id": "T-102",
+        "symbol": "",
+        "side": "INVALID",
+        "quantity": -50,
+        "entry_price": 0.0,
+        "exit_price": -10.0,
+        "entry_time": "2026-01-03T10:00:00Z",
+        "exit_time": "2026-01-02T10:00:00Z",
+    },  # Invalid
 ]
-summary, clean_records = PostgreSQLExportPipeline.process_export(ExportType.TRADES, raw_trades)
+clean_records, summary = PostgreSQLExportPipeline.process_export(ExportType.TRADES, raw_trades)
 print(f"Valid: {summary.valid_clean_records}, Quarantined: {summary.quarantined_records}")
 for err in summary.errors:
     print(f"Rule: {err.rule_name} -> {err.error_message}")
@@ -278,7 +296,7 @@ for err in summary.errors:
 
 ## Testing & Quality Assurance
 
-The codebase is rigorously validated with 100% test coverage, strict static typing via Mypy, and Ruff linting:
+The codebase is validated with 97% test coverage (150 tests), strict static typing via Mypy, and Ruff linting:
 
 ```bash
 # Run pytest test suite
@@ -295,4 +313,4 @@ python -m mypy src tests
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the `license` field in `pyproject.toml`.

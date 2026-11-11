@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sys
 from typing import Optional
 
 import click
@@ -42,11 +43,22 @@ from fintech_algorithmic_trading.types import (
 console = Console()
 
 
+def _require_portfolio(portfolio_id: str):
+    port = PortfolioRepository.get_portfolio(portfolio_id)
+    if not port:
+        console.print(f"[bold red]Error: Portfolio '{portfolio_id}' not found.[/bold red]")
+        raise click.Abort()
+    return port
+
+
 @click.group()
 @click.version_option(version="0.1.0", prog_name="fintech-algorithmic-trading")
 def cli():
     """FinTech Algorithmic Trading Risk Engine & Monte Carlo VaR Analyzer."""
-    pass
+    # Greek letters / box chars crash cp1252 Windows consoles.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 @cli.command("list-portfolios")
@@ -95,16 +107,19 @@ def list_portfolios_cmd(json_out: bool = False):
 @cli.command("analyze-var")
 @click.option("--portfolio", "-p", default="global-macro", help="Portfolio preset ID")
 @click.option(
-    "--confidence", "-c", default=0.95, type=float, help="Confidence level (e.g. 0.95, 0.99)"
+    "--confidence",
+    "-c",
+    default=0.95,
+    type=click.FloatRange(0, 1, min_open=True, max_open=True),
+    help="Confidence level (e.g. 0.95, 0.99)",
 )
-@click.option("--horizon", "-h", default=1, type=int, help="Holding horizon in trading days")
+@click.option(
+    "--horizon", "-h", default=1, type=click.IntRange(min=1), help="Holding horizon in trading days"
+)
 @click.option("--json-out", is_flag=True, help="Output raw JSON")
 def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: bool):
     """Compute Historical, Parametric, and Cornish-Fisher VaR & Expected Shortfall."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     # Generate synthetic returns calibrated to portfolio volatility
     synthetic_returns = PortfolioRepository.generate_synthetic_returns(
@@ -158,8 +173,16 @@ def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: b
 
 @cli.command("simulate")
 @click.option("--portfolio", "-p", default="tech-momentum", help="Portfolio preset ID")
-@click.option("--sims", "-n", default=2000, type=int, help="Number of Monte Carlo paths")
-@click.option("--horizon", "-h", default=21, type=int, help="Forecast horizon in days")
+@click.option(
+    "--sims",
+    "-n",
+    default=2000,
+    type=click.IntRange(100, 100000),
+    help="Number of Monte Carlo paths",
+)
+@click.option(
+    "--horizon", "-h", default=21, type=click.IntRange(1, 1260), help="Forecast horizon in days"
+)
 @click.option(
     "--model",
     "-m",
@@ -170,10 +193,7 @@ def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: b
 @click.option("--seed", "-s", default=42, type=int, help="Random seed")
 def simulate_cmd(portfolio: str, sims: int, horizon: int, model: str, seed: int):
     """Run multi-asset correlated Monte Carlo stochastic simulation."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     cfg = MonteCarloConfig(
         n_simulations=sims,
@@ -228,10 +248,7 @@ def simulate_cmd(portfolio: str, sims: int, horizon: int, model: str, seed: int)
 @click.option("--scenario", "-s", default=None, help="Specific scenario ID (default: all)")
 def stress_test_cmd(portfolio: str, scenario: Optional[str]):
     """Execute macroeconomic crisis stress test scenarios."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     scenarios = PortfolioRepository.get_stress_scenarios()
     if scenario:
@@ -277,10 +294,7 @@ def stress_test_cmd(portfolio: str, scenario: Optional[str]):
 @click.option("--max-sector", default=0.45, type=float, help="Max sector concentration")
 def check_limits_cmd(portfolio: str, max_leverage: float, max_pos: float, max_sector: float):
     """Audit portfolio against risk policy limits and mandate restrictions."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     custom_limits = RiskLimits(
         max_leverage=max_leverage,
@@ -327,10 +341,34 @@ def check_limits_cmd(portfolio: str, max_leverage: float, max_pos: float, max_se
 
 @cli.command("greeks")
 @click.option("--type", "option_type", type=click.Choice(["CALL", "PUT"]), default="CALL")
-@click.option("--spot", "-s", default=100.0, type=float, help="Underlying spot price")
-@click.option("--strike", "-k", default=100.0, type=float, help="Strike price")
-@click.option("--time", "-t", default=0.25, type=float, help="Years to expiration")
-@click.option("--vol", "-v", default=0.20, type=float, help="Implied volatility")
+@click.option(
+    "--spot",
+    "-s",
+    default=100.0,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Underlying spot price",
+)
+@click.option(
+    "--strike",
+    "-k",
+    default=100.0,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Strike price",
+)
+@click.option(
+    "--time",
+    "-t",
+    default=0.25,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Years to expiration",
+)
+@click.option(
+    "--vol",
+    "-v",
+    default=0.20,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Implied volatility",
+)
 @click.option("--rate", "-r", default=0.045, type=float, help="Risk-free rate")
 def greeks_cmd(
     option_type: str,
@@ -373,8 +411,14 @@ def greeks_cmd(
     default="composite",
     help="Alpha strategy model",
 )
-@click.option("--bars", "-b", default=252, type=int, help="Historical bars count")
-@click.option("--capital", "-c", default=100_000.0, type=float, help="Initial capital")
+@click.option("--bars", "-b", default=252, type=click.IntRange(min=1), help="Historical bars count")
+@click.option(
+    "--capital",
+    "-c",
+    default=100_000.0,
+    type=click.FloatRange(min=0, min_open=True),
+    help="Initial capital",
+)
 def backtest_cmd(symbol: str, strategy: str, bars: int, capital: float):
     """Run event-driven backtest with realistic execution slippage and commissions."""
     feed = MarketDataFeed()
@@ -441,10 +485,7 @@ def backtest_cmd(symbol: str, strategy: str, bars: int, capital: float):
 @click.option("--portfolio", "-p", default="global-macro", help="Portfolio preset ID")
 def surveillance_cmd(portfolio: str):
     """Run real-time risk surveillance audit and circuit breaker status check."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     monitor = RiskSurveillanceMonitor()
     report = monitor.audit_portfolio(port)
@@ -528,10 +569,7 @@ def orderbook_cmd(symbol: str, price: float, levels: int):
 @click.option("--output", "-o", default=None, help="Save markdown report to file path")
 def report_cmd(portfolio: str, output: Optional[str]):
     """Generate institutional quantitative risk tearsheet."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     # Generate synthetic returns calibrated to portfolio
     synthetic_returns = PortfolioRepository.generate_synthetic_returns(
@@ -629,10 +667,7 @@ def clean_export_cmd(
     elif exp_enum == ExportType.POSITIONS:
         port_id = portfolio or "global-macro"
         default_port_id = port_id
-        port = PortfolioRepository.get_portfolio(port_id)
-        if not port:
-            console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
-            raise click.Abort()
+        port = _require_portfolio(port_id)
         csv_text = DataExporter.export_portfolio_positions_csv(port)
     elif exp_enum == ExportType.EQUITY_CURVE:
         default_port_id = portfolio or "global-macro"
@@ -842,10 +877,7 @@ def sql_generate_cmd(
                 records = list(csv.DictReader(f))
         elif exp_enum == ExportType.POSITIONS:
             port_id = portfolio or "global-macro"
-            port = PortfolioRepository.get_portfolio(port_id)
-            if not port:
-                console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
-                raise click.Abort()
+            port = _require_portfolio(port_id)
             buf = io.StringIO()
             writer = csv.writer(buf)
             writer.writerow(

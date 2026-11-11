@@ -43,6 +43,14 @@ from fintech_algorithmic_trading.types import (
 console = Console()
 
 
+def _require_portfolio(portfolio_id: str):
+    port = PortfolioRepository.get_portfolio(portfolio_id)
+    if not port:
+        console.print(f"[bold red]Error: Portfolio '{portfolio_id}' not found.[/bold red]")
+        raise click.Abort()
+    return port
+
+
 @click.group()
 @click.version_option(version="0.1.0", prog_name="fintech-algorithmic-trading")
 def cli():
@@ -111,10 +119,7 @@ def list_portfolios_cmd(json_out: bool = False):
 @click.option("--json-out", is_flag=True, help="Output raw JSON")
 def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: bool):
     """Compute Historical, Parametric, and Cornish-Fisher VaR & Expected Shortfall."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     # Generate synthetic returns calibrated to portfolio volatility
     synthetic_returns = PortfolioRepository.generate_synthetic_returns(
@@ -188,10 +193,7 @@ def analyze_var_cmd(portfolio: str, confidence: float, horizon: int, json_out: b
 @click.option("--seed", "-s", default=42, type=int, help="Random seed")
 def simulate_cmd(portfolio: str, sims: int, horizon: int, model: str, seed: int):
     """Run multi-asset correlated Monte Carlo stochastic simulation."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     cfg = MonteCarloConfig(
         n_simulations=sims,
@@ -246,10 +248,7 @@ def simulate_cmd(portfolio: str, sims: int, horizon: int, model: str, seed: int)
 @click.option("--scenario", "-s", default=None, help="Specific scenario ID (default: all)")
 def stress_test_cmd(portfolio: str, scenario: Optional[str]):
     """Execute macroeconomic crisis stress test scenarios."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     scenarios = PortfolioRepository.get_stress_scenarios()
     if scenario:
@@ -295,10 +294,7 @@ def stress_test_cmd(portfolio: str, scenario: Optional[str]):
 @click.option("--max-sector", default=0.45, type=float, help="Max sector concentration")
 def check_limits_cmd(portfolio: str, max_leverage: float, max_pos: float, max_sector: float):
     """Audit portfolio against risk policy limits and mandate restrictions."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     custom_limits = RiskLimits(
         max_leverage=max_leverage,
@@ -489,10 +485,7 @@ def backtest_cmd(symbol: str, strategy: str, bars: int, capital: float):
 @click.option("--portfolio", "-p", default="global-macro", help="Portfolio preset ID")
 def surveillance_cmd(portfolio: str):
     """Run real-time risk surveillance audit and circuit breaker status check."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     monitor = RiskSurveillanceMonitor()
     report = monitor.audit_portfolio(port)
@@ -576,10 +569,7 @@ def orderbook_cmd(symbol: str, price: float, levels: int):
 @click.option("--output", "-o", default=None, help="Save markdown report to file path")
 def report_cmd(portfolio: str, output: Optional[str]):
     """Generate institutional quantitative risk tearsheet."""
-    port = PortfolioRepository.get_portfolio(portfolio)
-    if not port:
-        console.print(f"[bold red]Error: Portfolio '{portfolio}' not found.[/bold red]")
-        raise click.Abort()
+    port = _require_portfolio(portfolio)
 
     # Generate synthetic returns calibrated to portfolio
     synthetic_returns = PortfolioRepository.generate_synthetic_returns(
@@ -677,10 +667,7 @@ def clean_export_cmd(
     elif exp_enum == ExportType.POSITIONS:
         port_id = portfolio or "global-macro"
         default_port_id = port_id
-        port = PortfolioRepository.get_portfolio(port_id)
-        if not port:
-            console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
-            raise click.Abort()
+        port = _require_portfolio(port_id)
         csv_text = DataExporter.export_portfolio_positions_csv(port)
     elif exp_enum == ExportType.EQUITY_CURVE:
         default_port_id = portfolio or "global-macro"
@@ -890,10 +877,7 @@ def sql_generate_cmd(
                 records = list(csv.DictReader(f))
         elif exp_enum == ExportType.POSITIONS:
             port_id = portfolio or "global-macro"
-            port = PortfolioRepository.get_portfolio(port_id)
-            if not port:
-                console.print(f"[bold red]Error: Portfolio '{port_id}' not found.[/bold red]")
-                raise click.Abort()
+            port = _require_portfolio(port_id)
             buf = io.StringIO()
             writer = csv.writer(buf)
             writer.writerow(

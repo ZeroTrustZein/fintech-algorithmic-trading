@@ -265,8 +265,26 @@ from fintech_algorithmic_trading.storage.sql_pipeline import PostgreSQLExportPip
 from fintech_algorithmic_trading.types import ExportType
 
 raw_trades = [
-    {"trade_id": "T-101", "symbol": "AAPL", "side": "BUY", "quantity": 100, "entry_price": 180.0, "exit_price": 185.0, "entry_time": "2026-01-02T10:00:00Z", "exit_time": "2026-01-02T15:00:00Z"},
-    {"trade_id": "T-102", "symbol": "", "side": "INVALID", "quantity": -50, "entry_price": 0.0, "exit_price": -10.0, "entry_time": "2026-01-03T10:00:00Z", "exit_time": "2026-01-02T10:00:00Z"},  # Invalid
+    {
+        "trade_id": "T-101",
+        "symbol": "AAPL",
+        "side": "BUY",
+        "quantity": 100,
+        "entry_price": 180.0,
+        "exit_price": 185.0,
+        "entry_time": "2026-01-02T10:00:00Z",
+        "exit_time": "2026-01-02T15:00:00Z",
+    },
+    {
+        "trade_id": "T-102",
+        "symbol": "",
+        "side": "INVALID",
+        "quantity": -50,
+        "entry_price": 0.0,
+        "exit_price": -10.0,
+        "entry_time": "2026-01-03T10:00:00Z",
+        "exit_time": "2026-01-02T10:00:00Z",
+    },  # Invalid
 ]
 summary, clean_records = PostgreSQLExportPipeline.process_export(ExportType.TRADES, raw_trades)
 print(f"Valid: {summary.valid_clean_records}, Quarantined: {summary.quarantined_records}")

@@ -51,32 +51,32 @@ Package: `fintech_algorithmic_trading.types`
 
 #### `Asset`
 Tradable financial instrument representation.
-- `symbol: str` — Ticker symbol.
-- `name: str` — Full descriptive security name.
-- `asset_class: AssetClass` — Asset category.
-- `sector: Optional[str] = "General"` — Industry classification.
-- `currency: str = "USD"` — Denomination currency.
-- `current_price: float` (gt 0) — Current market spot price.
-- `volatility_annual: float` (ge 0) — Annualized return standard deviation.
-- `beta_to_market: float = 1.0` — Beta relative to benchmark.
-- `dividend_yield: float = 0.0` — Annual dividend or yield rate.
+- `symbol: str`: Ticker symbol.
+- `name: str`: Full descriptive security name.
+- `asset_class: AssetClass`: Asset category.
+- `sector: Optional[str] = "General"`: Industry classification.
+- `currency: str = "USD"`: Denomination currency.
+- `current_price: float` (gt 0): Current market spot price.
+- `volatility_annual: float` (ge 0): Annualized return standard deviation.
+- `beta_to_market: float = 1.0`: Beta relative to benchmark.
+- `dividend_yield: float = 0.0`: Annual dividend or yield rate.
 
 #### `Position`
 Open investment position.
-- `asset: Asset` — Target instrument.
-- `quantity: float` (gt 0) — Units held.
-- `entry_price: float` (ge 0) — Cost basis per share.
-- `current_price: float` (gt 0) — Latest mark price.
-- `side: PositionType = PositionType.LONG` — Directional bias.
+- `asset: Asset`: Target instrument.
+- `quantity: float` (gt 0): Units held.
+- `entry_price: float` (ge 0): Cost basis per share.
+- `current_price: float` (gt 0): Latest mark price.
+- `side: PositionType = PositionType.LONG`: Directional bias.
 - **Computed Properties**: `market_value`, `cost_basis`, `unrealized_pnl`, `unrealized_pnl_pct`.
 
 #### `Portfolio`
 Multi-asset institutional account container.
-- `id: str` — Unique portfolio identifier.
-- `name: str` — Human-readable name.
-- `description: str` — Mandate narrative.
-- `cash: float = 0.0` (ge 0) — Free unencumbered cash.
-- `positions: List[Position]` — List of open positions.
+- `id: str`: Unique portfolio identifier.
+- `name: str`: Human-readable name.
+- `description: str`: Mandate narrative.
+- `cash: float = 0.0` (ge 0): Free unencumbered cash.
+- `positions: List[Position]`: List of open positions.
 - `base_currency: str = "USD"`.
 - **Computed Properties**: `net_asset_value`, `total_positions_value`, `gross_exposure`, `net_exposure`, `leverage`, `asset_weights`, `sector_weights`.
 

@@ -8,7 +8,7 @@ A practical guide for quantitative analysts, portfolio risk officers, and algori
 
 ### From Source
 ```bash
-git clone https://github.com/zein/fintech-algorithmic-trading.git
+git clone https://github.com/ZeroTrustZein/fintech-algorithmic-trading.git
 cd fintech-algorithmic-trading
 
 # Create and activate virtual environment

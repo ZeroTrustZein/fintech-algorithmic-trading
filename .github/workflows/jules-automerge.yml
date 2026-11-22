@@ -1,0 +1,103 @@
+name: Jules auto-merge
+
+# Merges a pull request into the default branch by itself once
+#   1. Jules has looked at it: Jules opened the PR (Jules reviews its own work
+#      before opening it), or a Jules account left a review or comment on it,
+#      with no outstanding "changes requested" from Jules, and
+#   2. every other check and status on the PR's latest commit has passed, and
+#   3. the PR is not a draft and has no "no-automerge" label.
+# Re-evaluated whenever the PR changes, gets a review or comment, or CI finishes.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+  check_suite:
+    types: [completed]
+  status:
+  # Safe here: no checkout and no PR code runs; the job only reads PR state via the API.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: ["CI"]
+    types: [completed]
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+  actions: read
+
+concurrency:
+  group: jules-automerge-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.head_sha || github.event.check_suite.head_sha || github.event.sha }}
+  cancel-in-progress: false
+
+jobs:
+  gate-and-merge:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const SELF = 'gate-and-merge';
+            const isJules = (u) => !!u && /jules/i.test(u.login || '');
+
+            // Work out which PR(s) this event is about.
+            let numbers = [];
+            if (context.payload.pull_request) numbers = [context.payload.pull_request.number];
+            else if (context.payload.issue) numbers = [context.payload.issue.number];
+            else {
+              const sha = context.payload.workflow_run?.head_sha || context.payload.check_suite?.head_sha || context.payload.sha;
+              if (!sha) { core.info('No commit for this event.'); return; }
+              const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
+              numbers = prs.filter(p => p.head.sha === sha).map(p => p.number);
+            }
+            if (!numbers.length) { core.info('No pull request for this event.'); return; }
+
+            for (const number of numbers) {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+              const why = (msg) => core.info(`PR #${number}: not merging, ${msg}`);
+              if (pr.state !== 'open') { why('it is not open'); continue; }
+              if (pr.draft) { why('it is a draft'); continue; }
+              if (pr.base.ref !== pr.base.repo.default_branch) { why(`base is ${pr.base.ref}`); continue; }
+              if (pr.labels.some(l => l.name === 'no-automerge')) { why('it has the no-automerge label'); continue; }
+
+              // 1. Jules signal.
+              const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: number });
+              const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number });
+              const julesReviews = reviews.filter(r => isJules(r.user) && r.state !== 'PENDING');
+              const lastJulesReview = julesReviews[julesReviews.length - 1];
+              if (lastJulesReview && lastJulesReview.state === 'CHANGES_REQUESTED') { why('Jules requested changes'); continue; }
+              const julesSeen = isJules(pr.user) || julesReviews.length > 0 || comments.some(c => isJules(c.user));
+              if (!julesSeen) { why('Jules has not reviewed or commented on it yet'); continue; }
+
+              // 2. Every other check run and commit status on the head commit is green.
+              const runs = await github.paginate(github.rest.checks.listForRef, { owner, repo, ref: pr.head.sha, per_page: 100 });
+              const latestByName = {};
+              for (const r of runs) {
+                if (r.name === SELF) continue;
+                const prev = latestByName[r.name];
+                if (!prev || new Date(r.started_at) > new Date(prev.started_at)) latestByName[r.name] = r;
+              }
+              const pending = Object.values(latestByName).filter(r => r.status !== 'completed').map(r => r.name);
+              const failed = Object.values(latestByName)
+                .filter(r => r.status === 'completed' && !['success', 'neutral', 'skipped'].includes(r.conclusion))
+                .map(r => `${r.name} (${r.conclusion})`);
+              const { data: combined } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: pr.head.sha });
+              if (combined.total_count > 0 && combined.state === 'pending') pending.push('commit statuses');
+              if (combined.total_count > 0 && combined.state === 'failure') failed.push('commit statuses');
+              if (failed.length) { why(`checks failed: ${failed.join(', ')}`); continue; }
+              if (pending.length) { why(`checks still running: ${pending.join(', ')}`); continue; }
+
+              // 3. Merge (sha pins the exact commit Jules and CI saw).
+              try {
+                await github.rest.pulls.merge({ owner, repo, pull_number: number, sha: pr.head.sha, merge_method: 'squash' });
+                core.notice(`Merged PR #${number}.`);
+              } catch (e) {
+                core.setFailed(`PR #${number}: merge failed: ${e.message}`);
+              }
+            }
